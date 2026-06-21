@@ -43,6 +43,28 @@ the narrow-but-real slice: it works today on **deterministic functions with
 type-hinted, generatable parameters** — not yet on stateful classes, I/O against
 live systems, or cross-file refactors.
 
+## Check a real refactor using the repo's own tests (capture-replay)
+
+`probe.check` generates inputs, which fails on real code that is untyped or in a
+package (see `experiments/FINDINGS.md`). The capture-replay path instead records
+**real arguments from an existing test run** and replays both versions, loaded
+package-aware from git worktrees. No type hints required; relative imports work.
+
+```bash
+# 1. capture real call arguments while the repo's tests run (in the repo)
+cd /path/to/repo
+PYTHONPATH=/path/to/probe python3 -m probe.capture <module> <pytest_target> --out caps.pkl
+
+# 2. replay those inputs across two refs and get a per-function verdict
+python3 -m probe.replay /path/to/repo <base_ref> <head_ref> caps.pkl
+```
+
+Measured: on `inflection` (untyped history) this turns `probe.check`'s 0% into
+**100% sound auto-verify** (9 equivalent, 3 real behavior changes caught) across
+20 real commits — because the inputs come from tests, not from guessing. Coverage
+then tracks test coverage; the soundness rules (refuse uncontrolled I/O / threads
+/ opaque returns) are unchanged.
+
 ## What it does
 
 For every unit (an `original` + a `refactored` function):
@@ -94,8 +116,12 @@ Replace the corpus with real material:
 ```
 run_probe.py                         entry point for the corpus demo (fixes hash seed)
 probe/check.py                       CLI: check a real refactor (two files or git refs)
+probe/capture.py                     CLI: capture real call args from a test run
+probe/replay.py                      CLI: replay captured args across two refs (worktrees)
+probe/canonical.py                   JSON canonical value form (cross-process compare)
 probe/extract.py                     pull + pair functions from two module versions
 probe/_worker.py                     isolated per-unit subprocess worker
+probe/_replay_worker.py              per-version replay subprocess
 probe/effects.py                     recorded, deterministic effect shims
 probe/generators.py                  type-hint-driven input generation
 probe/harness.py                     observe / self-check / diff / classify (the core)

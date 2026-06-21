@@ -68,3 +68,37 @@ investment, and even then Python's untyped reality caps it. The credible paths:
 
 The decisive next experiment if continuing: wire runtime argument capture (option
 1) and re-measure on a real repo's own test suite.
+
+## 5. The pivot works: capture real inputs instead of generating them
+
+We built it (`probe/capture.py`, `probe/replay.py`, `probe/_replay_worker.py`,
+`probe/canonical.py`) and ran it on the same repo that scored 0%.
+
+- **Capture:** a `sys.setprofile` hook recorded arguments to inflection's
+  functions while its real test suite ran — **704 distinct arg-sets across 13
+  functions from 455 passing tests, with zero type hints needed.**
+- **Replay:** each version checked out as a `git worktree` (relative imports just
+  work) and run in its own subprocess; observations compared structurally with
+  the soundness rules intact.
+
+Result on inflection, HEAD~20..HEAD, real captured inputs:
+
+| metric | hint-generation (§2) | **capture-replay** |
+|---|---|---|
+| sound auto-verify | **0%** | **100%** (12/12 comparable functions) |
+| equivalent | 0 | 9 |
+| divergent (real changes caught) | 0 | 3 |
+
+The 3 divergences are genuine historical behavior changes, caught at real inputs:
+`pluralize("passerby")` (passerbies → passersby), `singularize("passersby")`,
+`titleize("ana índia")` (Unicode capitalization fix). Verified by hand.
+
+**Conclusion: capturing inputs from an existing test suite removes both walls at
+once** — no type hints required (capture sidesteps generation), and worktree-based
+loading handles package/relative imports. The sound core drops straight in. This
+is the viable shape of the tool: *point it at a repo that has tests, and it tells
+you which functions a refactor provably left unchanged — soundly.*
+
+Remaining limits: only functions exercised by tests get inputs (coverage tracks
+test coverage); capture is in-process via pytest today; cross-version comparison
+is state-structural (custom `__eq__` honored only in-process).

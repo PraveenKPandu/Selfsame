@@ -234,5 +234,49 @@ class TestSoundness(unittest.TestCase):
         self.assertIsNone(io_capability(pure, "g"))
 
 
+class TestCanonical(unittest.TestCase):
+    def test_object_and_edge_cases(self):
+        from probe.canonical import canonical
+
+        class P:
+            def __init__(self, x):
+                self.x = x
+        self.assertEqual(canonical(P(1)), canonical(P(1)))
+        self.assertNotEqual(canonical(P(1)), canonical(P(2)))
+        self.assertEqual(canonical(float("nan")), canonical(float("nan")))
+        self.assertEqual(canonical(-0.0), canonical(0.0))
+        self.assertEqual(canonical({"a": 1, "b": 2}), canonical({"b": 2, "a": 1}))
+        self.assertNotEqual(canonical([1, 2]), canonical([2, 1]))
+        self.assertNotEqual(canonical(1), canonical(1.0))  # type matters
+
+
+class TestReplayLogic(unittest.TestCase):
+    def test_same_and_unsound(self):
+        from probe import replay
+        a = {"val": ["int", 1], "io": 0, "threads": 0}
+        b = {"val": ["int", 1], "io": 0, "threads": 0}
+        c = {"val": ["int", 2], "io": 0, "threads": 0}
+        self.assertTrue(replay._same(a, b))
+        self.assertFalse(replay._same(a, c))
+        self.assertFalse(replay._same(a, {"exc": "ValueError: x", "io": 0, "threads": 0}))
+        self.assertEqual(replay._unsound([{"io": 1, "threads": 0}]), "uncontrolled-io")
+        self.assertEqual(replay._unsound([{"io": 0, "threads": 2}]), "concurrency")
+        self.assertIsNone(replay._unsound([{"io": 0, "threads": 0, "val": ["str", "x"]}]))
+
+    def test_verdict(self):
+        import pickle
+
+        from probe import replay
+        blobs = [pickle.dumps(["q"])]
+        loaded = lambda obs: {"loaded": True, "error": None, "obs": obs}
+        eq = loaded([{"val": ["str", "Q"], "io": 0, "threads": 0}])
+        self.assertEqual(replay._verdict(eq, eq, blobs)[0], "equivalent")
+        diff = loaded([{"val": ["str", "Z"], "io": 0, "threads": 0}])
+        self.assertEqual(replay._verdict(eq, diff, blobs)[0], "divergent")
+        io = loaded([{"val": ["str", "Q"], "io": 1, "threads": 0}])
+        self.assertEqual(replay._verdict(io, io, blobs)[0], "unverifiable")
+        self.assertEqual(replay._verdict({"error": "boom"}, eq, blobs)[0], "error")
+
+
 if __name__ == "__main__":
     unittest.main()
