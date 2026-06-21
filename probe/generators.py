@@ -60,13 +60,20 @@ def _pool_for(annotation: Any) -> List[Any]:
 
     if origin in (list, typing.List):
         elem = args[0] if args else int
-        return [list(v) for v in _LIST_ELEMS.get(elem, _LIST_ELEMS[int])]
+        if elem not in _LIST_ELEMS:
+            raise UnsupportedSignature("no generator for list element %r" % (elem,))
+        return [list(v) for v in _LIST_ELEMS[elem]]
 
     if origin in (tuple, typing.Tuple):
         elem = args[0] if args else int
-        return [tuple(v) for v in _LIST_ELEMS.get(elem, _LIST_ELEMS[int])]
+        if elem not in _LIST_ELEMS:
+            raise UnsupportedSignature("no generator for tuple element %r" % (elem,))
+        return [tuple(v) for v in _LIST_ELEMS[elem]]
 
     if origin in (dict, typing.Dict):
+        # Only primitive key/value types; a domain-typed dict is unsupported.
+        if args and any(a not in (int, float, str, bool) for a in args):
+            raise UnsupportedSignature("no generator for dict types %r" % (args,))
         return [{}, {"k": 1}, {"a": 1, "b": 2}]
 
     # typing.Optional[T] -> include None alongside T's pool.
