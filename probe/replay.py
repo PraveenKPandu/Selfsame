@@ -29,13 +29,13 @@ def _git(repo, *args):
     return subprocess.check_output(["git", "-C", repo] + list(args), text=True)
 
 
-def _worker(worktree, module_name, func_name, blobs) -> Dict:
+def _worker(worktree, module_name, qualname, blobs) -> Dict:
     env = dict(os.environ)
     env["PYTHONHASHSEED"] = "0"
     env["PYTHONPATH"] = _repo_root() + os.pathsep + env.get("PYTHONPATH", "")
     job = json.dumps({
         "worktree": worktree, "module_name": module_name,
-        "func_name": func_name,
+        "qualname": qualname,
         "args_b64": [base64.b64encode(b).decode("ascii") for b in blobs],
     })
     try:
@@ -60,6 +60,8 @@ def _has_opaque(node) -> bool:
 
 def _unsound(obs_list) -> Optional[str]:
     for o in obs_list:
+        if o.get("nondet"):
+            return "nondeterministic"
         if o.get("io", 0) > 0:
             return "uncontrolled-io"
         if o.get("threads", 0) > 0:
@@ -90,49 +92,60 @@ def _rm_worktree(repo, wt) -> None:
         shutil.rmtree(wt, ignore_errors=True)
 
 
-def replay(repo: str, base: str, head: str, capture_path: str) -> int:
-    with open(capture_path, "rb") as f:
-        cap = pickle.load(f)
-    module_name = cap["module"]
-    records: Dict[str, List[bytes]] = cap["records"]
+def _split_key(key: str):
+    """'module::Class.method' -> ('module', 'Class.method')."""
+    if "::" in key:
+        mod, qual = key.split("::", 1)
+        return mod, qual
+    return key, key  # legacy/loose form
 
-    base_wt = _add_worktree(repo, base)
-    head_wt = _add_worktree(repo, head)
-    print("Replay: %s  %s..%s  (%d functions, real captured inputs)"
-          % (module_name, base, head, len(records)))
+
+def replay_paths(base_path: str, head_path: str,
+                 records: Dict[str, List[bytes]], label: str) -> int:
+    """Compare two already-materialized versions (directories on disk)."""
+    print("Replay: %s  (%d functions, real captured inputs)" % (label, len(records)))
     print("=" * 74)
 
     tally: Dict[str, int] = {}
     rows = []
-    try:
-        for name in sorted(records):
-            blobs = records[name]
-            b = _worker(base_wt, module_name, name, blobs)
-            h = _worker(head_wt, module_name, name, blobs)
-            verdict, note = _verdict(b, h, blobs)
-            tally[verdict] = tally.get(verdict, 0) + 1
-            rows.append((name, len(blobs), verdict, note))
-    finally:
-        _rm_worktree(repo, base_wt)
-        _rm_worktree(repo, head_wt)
+    for key in sorted(records):
+        module_name, qualname = _split_key(key)
+        blobs = records[key]
+        b = _worker(base_path, module_name, qualname, blobs)
+        h = _worker(head_path, module_name, qualname, blobs)
+        verdict, note = _verdict(b, h, blobs)
+        tally[verdict] = tally.get(verdict, 0) + 1
+        rows.append((qualname, len(blobs), verdict, note))
 
     for name, n, verdict, note in rows:
-        print("  %-20s n=%-4d %-13s %s" % (name, n, verdict, note))
+        print("  %-30s n=%-4d %-13s %s" % (name, n, verdict, note))
 
     checked = sum(1 for _n, _c, v, _t in rows
-                  if v in ("equivalent", "divergent", "unverifiable", "unsupported"))
+                  if v in ("equivalent", "divergent", "unverifiable"))
     verifiable = tally.get("equivalent", 0) + tally.get("divergent", 0)
     print("\n" + "-" * 74)
     print("Functions with captured inputs : %d" % len(rows))
     if checked:
         print("Sound auto-verify              : %d/%d = %.0f%%"
               % (verifiable, checked, 100.0 * verifiable / checked))
-    print("  equivalent   : %d   divergent : %d   unverifiable : %d"
+    print("  equivalent : %d   divergent : %d   unverifiable : %d   not-comparable : %d"
           % (tally.get("equivalent", 0), tally.get("divergent", 0),
-             tally.get("unverifiable", 0)))
-    print("  not-comparable (added/removed/load-error): %d"
-          % (tally.get("skipped", 0) + tally.get("error", 0)))
-    return 0
+             tally.get("unverifiable", 0),
+             tally.get("skipped", 0) + tally.get("error", 0)))
+    return 1 if tally.get("divergent", 0) else 0
+
+
+def replay(repo: str, base: str, head: str, capture_path: str) -> int:
+    with open(capture_path, "rb") as f:
+        cap = pickle.load(f)
+    records: Dict[str, List[bytes]] = cap["records"]
+    base_wt = _add_worktree(repo, base)
+    head_wt = _add_worktree(repo, head)
+    try:
+        return replay_paths(base_wt, head_wt, records, "%s..%s" % (base, head))
+    finally:
+        _rm_worktree(repo, base_wt)
+        _rm_worktree(repo, head_wt)
 
 
 def _verdict(b: Dict, h: Dict, blobs):

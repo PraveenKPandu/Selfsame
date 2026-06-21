@@ -1,89 +1,110 @@
-"""Capture real call arguments by observing an existing test run.
+"""Capture real call arguments by running a project's existing test command.
 
 This is the pivot away from generating inputs: real tests already call the code
-with realistic, type-correct arguments, so we record those instead of trying to
-synthesise them. A `sys.setprofile` hook watches every call and pickles the
-arguments of functions defined in the target module. Works with any test
-framework (it doesn't wrap anything) and needs no type hints.
+with realistic arguments, so we record those. A capture hook is injected into
+every Python process the command spawns (via a generated `sitecustomize` on
+PYTHONPATH), so it works with any runner — pytest, unittest, tox, or tests that
+spawn their own subprocesses — not just in-process pytest. No type hints needed.
 
-Run:  python3 -m probe.capture <module_name> <pytest_target> --out caps.pkl
-e.g.  (cd repo && python3 -m probe.capture inflection tests.py --out /tmp/caps.pkl)
+Run:
+  cd /path/to/repo
+  python3 -m probe.capture --modules inflection --out caps.pkl -- pytest -q
+  python3 -m probe.capture --modules mypkg --out caps.pkl -- python -m unittest
+
+Records are keyed "module::qualname" so functions and methods across modules and
+classes don't collide.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
+import os
 import pickle
+import subprocess
 import sys
-from typing import Dict, List, Optional, Set
+import tempfile
+from typing import Dict, List
 
-_PER_FUNC_CAP = 300  # keep replay bounded
+_CAP_PER_FUNC = 300
 
 
-class _Recorder:
-    def __init__(self, module_name: str, func_names: Optional[Set[str]]):
-        self.module_name = module_name
-        self.func_names = func_names
-        self.records: Dict[str, List[bytes]] = {}
-        self._seen: Dict[str, set] = {}
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    def profile(self, frame, event, arg):
-        if event != "call":
-            return
-        code = frame.f_code
-        name = code.co_name
-        if self.func_names is not None and name not in self.func_names:
-            return
-        if frame.f_globals.get("__name__") != self.module_name:
-            return
-        bucket = self.records.setdefault(name, [])
-        if len(bucket) >= _PER_FUNC_CAP:
-            return
+
+def _merge(cap_dir: str) -> Dict[str, List[bytes]]:
+    merged: Dict[str, List[bytes]] = {}
+    seen: Dict[str, set] = {}
+    for path in sorted(glob.glob(os.path.join(cap_dir, "cap-*.pkl"))):
         try:
-            varnames = code.co_varnames[:code.co_argcount]
-            values = [frame.f_locals[v] for v in varnames]
-            blob = pickle.dumps(values)
+            with open(path, "rb") as f:
+                part = pickle.load(f)
         except Exception:
-            return
-        seen = self._seen.setdefault(name, set())
-        h = hash(blob)
-        if h in seen:
-            return
-        seen.add(h)
-        bucket.append(blob)
+            continue
+        for key, blobs in part.items():
+            bucket = merged.setdefault(key, [])
+            s = seen.setdefault(key, set())
+            for b in blobs:
+                if len(bucket) >= _CAP_PER_FUNC:
+                    break
+                h = hash(b)
+                if h in s:
+                    continue
+                s.add(h)
+                bucket.append(b)
+    return merged
 
 
-def capture(module_name: str, pytest_args: List[str],
-            func_names: Optional[Set[str]] = None) -> Dict[str, List[bytes]]:
-    import importlib
+def capture_command(modules: List[str], command: List[str],
+                    funcs: List[str] = None, cwd: str = None) -> Dict[str, List[bytes]]:
+    """Run `command` with the capture hook injected; return merged records."""
+    work = tempfile.mkdtemp(prefix="probe_cap_")
+    cap_dir = os.path.join(work, "caps")
+    os.makedirs(cap_dir, exist_ok=True)
+    with open(os.path.join(work, "sitecustomize.py"), "w") as f:
+        f.write("import probe._capture_hook  # installed by probe.capture\n")
 
-    import pytest
-    importlib.import_module(module_name)  # ensure the target is importable
-    rec = _Recorder(module_name, func_names)
-    sys.setprofile(rec.profile)
-    try:
-        pytest.main(list(pytest_args))
-    finally:
-        sys.setprofile(None)
-    return rec.records
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [work, _repo_root()] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    env["PROBE_CAPTURE_DIR"] = cap_dir
+    env["PROBE_CAPTURE_MODULES"] = ",".join(modules)
+    if funcs:
+        env["PROBE_CAPTURE_FUNCS"] = ",".join(funcs)
+
+    subprocess.run(command, env=env, cwd=cwd)
+    return _merge(cap_dir)
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("module_name")
-    ap.add_argument("pytest_target", nargs="+")
-    ap.add_argument("--funcs", default=None, help="comma-separated function names")
+    ap = argparse.ArgumentParser(prog="probe.capture")
+    ap.add_argument("--modules", required=True,
+                    help="comma-separated module/package names to capture")
+    ap.add_argument("--funcs", default=None,
+                    help="optional comma-separated name/qualname allow-list")
     ap.add_argument("--out", required=True)
-    ns = ap.parse_args(argv)
-    funcs = set(ns.funcs.split(",")) if ns.funcs else None
-    records = capture(ns.module_name, ns.pytest_target, funcs)
+    # everything after `--` is the test command
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if "--" not in raw:
+        ap.error("provide the test command after `--`, e.g. -- pytest -q")
+    split = raw.index("--")
+    ns = ap.parse_args(raw[:split])
+    command = raw[split + 1:]
+    if not command:
+        ap.error("empty test command after `--`")
+
+    modules = [m for m in ns.modules.split(",") if m]
+    funcs = [f for f in ns.funcs.split(",")] if ns.funcs else None
+    records = capture_command(modules, command, funcs)
+
     with open(ns.out, "wb") as f:
-        pickle.dump({"module": ns.module_name, "records": records}, f)
+        pickle.dump({"records": records}, f)
     total = sum(len(v) for v in records.values())
-    print("captured %d distinct arg-sets across %d functions -> %s"
+    print("\ncaptured %d distinct arg-sets across %d functions -> %s"
           % (total, len(records), ns.out))
-    for name in sorted(records):
-        print("  %-20s %d" % (name, len(records[name])))
+    for key in sorted(records):
+        print("  %-40s %d" % (key, len(records[key])))
     return 0
 
 

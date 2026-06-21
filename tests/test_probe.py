@@ -278,5 +278,62 @@ class TestReplayLogic(unittest.TestCase):
         self.assertEqual(replay._verdict({"error": "boom"}, eq, blobs)[0], "error")
 
 
+class TestCaptureReplayUnits(unittest.TestCase):
+    def test_qualname_function_method_classmethod(self):
+        from probe import _capture_hook as hook
+
+        def f(x):
+            return x
+
+        class C:
+            def m(self, x):
+                return x
+
+            def cm(cls, x):  # name only; first param 'cls' is what matters
+                return x
+
+        # method -> <class qualname>.<name>; classmethod uses the class arg;
+        # plain function -> just its name.
+        self.assertEqual(hook._qualname(f.__code__, [1]), "f")
+        self.assertEqual(hook._qualname(C.m.__code__, [C(), 1]), C.__qualname__ + ".m")
+        self.assertEqual(hook._qualname(C.cm.__code__, [C, 1]), C.__qualname__ + ".cm")
+
+    def test_module_prefix_match(self):
+        from probe import _capture_hook as hook
+        hook._MODULES = ("pkg",)
+        self.assertTrue(hook._module_matches("pkg"))
+        self.assertTrue(hook._module_matches("pkg.sub"))
+        self.assertFalse(hook._module_matches("pkgother"))
+        self.assertFalse(hook._module_matches("other"))
+
+    def test_merge_dedups_and_keys(self):
+        import os
+        import pickle
+        import tempfile
+
+        from probe import capture
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "cap-1.pkl"), "wb") as f:
+            pickle.dump({"m::f": [pickle.dumps([1]), pickle.dumps([2])]}, f)
+        with open(os.path.join(d, "cap-2.pkl"), "wb") as f:
+            pickle.dump({"m::f": [pickle.dumps([2]), pickle.dumps([3])]}, f)
+        merged = capture._merge(d)
+        self.assertEqual(len(merged["m::f"]), 3)  # 1,2,3 — the duplicate 2 dropped
+
+    def test_split_key_and_resolve(self):
+        from probe import replay
+        from probe._replay_worker import _resolve
+        self.assertEqual(replay._split_key("mod::Class.method"), ("mod", "Class.method"))
+
+        import types
+        m = types.ModuleType("m")
+
+        class Class:
+            def method(self):
+                return 1
+        m.Class = Class
+        self.assertIs(_resolve(m, "Class.method"), Class.method)
+
+
 if __name__ == "__main__":
     unittest.main()
