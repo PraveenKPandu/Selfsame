@@ -13,6 +13,36 @@ python3 run_probe.py
 No third-party dependencies (pure stdlib). It re-execs once to fix `PYTHONHASHSEED=0`
 so hash/set ordering is controlled for the whole run.
 
+## Check a real refactor
+
+The demo above runs the engine against a hand-built corpus. To point it at
+*actual* code — two versions of a module — use `probe.check`. It extracts the
+top-level functions present in both versions, pairs the ones whose signatures
+are unchanged, and checks each in an **isolated subprocess**:
+
+```bash
+# two files on disk
+python3 -m probe.check before.py after.py
+
+# two git refs + a path in the repo
+python3 -m probe.check --git main HEAD app/calc.py
+```
+
+Try it on the bundled example (an equivalent refactor, one real bug, an
+entropy-using function, an unannotated function, and a signature change):
+
+```bash
+python3 -m probe.check examples/calc_before.py examples/calc_after.py
+```
+
+Each matched function gets one verdict: `equivalent` (trustworthy pass),
+`divergent` (shows the input + before→after), `unverifiable` (nondeterministic,
+with cause), or `unsupported` (no input-generation strategy for its types). The
+command exits non-zero when any divergence is caught, so it can gate CI. This is
+the narrow-but-real slice: it works today on **deterministic functions with
+type-hinted, generatable parameters** — not yet on stateful classes, I/O against
+live systems, or cross-file refactors.
+
 ## What it does
 
 For every unit (an `original` + a `refactored` function):
@@ -62,7 +92,10 @@ Replace the corpus with real material:
 ## Files
 
 ```
-run_probe.py                         entry point (fixes hash seed, runs)
+run_probe.py                         entry point for the corpus demo (fixes hash seed)
+probe/check.py                       CLI: check a real refactor (two files or git refs)
+probe/extract.py                     pull + pair functions from two module versions
+probe/_worker.py                     isolated per-unit subprocess worker
 probe/effects.py                     recorded, deterministic effect shims
 probe/generators.py                  type-hint-driven input generation
 probe/harness.py                     observe / self-check / diff / classify (the core)
@@ -70,6 +103,7 @@ probe/equality.py                    structural value equality (not repr)
 probe/runner.py                      orchestration, metrics, thresholds, verdict
 probe/model.py                       Unit dataclass
 units/                               the stratified corpus + positive controls
+examples/                            calc_before.py / calc_after.py for probe.check
 tests/                               unit + end-to-end tests (python3 -m unittest discover -s tests)
 ```
 
@@ -88,6 +122,14 @@ tests/                               unit + end-to-end tests (python3 -m unittes
 - **Unsupported inputs are refused, not faked.** If the generator has no strategy
   for a parameter's type, the unit is reported `unsupported` (counts against
   coverage) instead of fed a placeholder value.
+- **Input generation is bounded, not exhaustive.** The stdlib generator caps the
+  number of input combinations per function, so an "equivalent" verdict means
+  "equivalent on the inputs tried", not a proof. Hypothesis is the intended
+  upgrade for real coverage.
+- **Isolation is per-unit, not per-call.** Each function is checked in its own
+  subprocess (crashes and runaway loops are contained, side effects are kept out
+  of the parent), but the function still runs several times *within* that
+  process. True per-call sandboxing (containers) is future work.
 - **The coverage % is corpus-relative.** It is a property of this hand-built
   stand-in corpus, not a real-world estimate. See "To run the real probe".
 # Selfsame

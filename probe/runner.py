@@ -13,8 +13,8 @@ from typing import List, Optional
 
 from . import harness
 from .generators import UnsupportedSignature, generate
-from .model import (EXPECT_DIVERGENT, EXPECT_EQUIVALENT, EXPECT_UNVERIFIABLE,
-                    Unit)
+from .model import (EXPECT_DIVERGENT, EXPECT_EQUIVALENT, EXPECT_UNKNOWN,
+                    EXPECT_UNVERIFIABLE, Unit)
 
 # Real-probe band from the README: a result here means "promising, confirm in a
 # typed language". Shown for context; not a pass/fail gate on the stand-in corpus.
@@ -63,7 +63,8 @@ def run_unit(unit: Unit) -> UnitResult:
     sc = harness.self_check(unit.original, inputs, unit.fixtures)
     if not sc.deterministic:
         res = UnitResult(unit, "unverifiable", cause=sc.cause, witness=sc.witness)
-        res.unexpected_unverifiable = unit.expect != EXPECT_UNVERIFIABLE
+        res.unexpected_unverifiable = unit.expect not in (
+            EXPECT_UNVERIFIABLE, EXPECT_UNKNOWN)
         res.cause_mismatch = (unit.expect_cause is not None
                               and sc.cause != unit.expect_cause)
         return res

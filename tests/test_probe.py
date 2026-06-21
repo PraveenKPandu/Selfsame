@@ -146,5 +146,43 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(d.equivalent)
 
 
+class TestExtract(unittest.TestCase):
+    def test_pairing(self):
+        from probe.extract import pair_functions
+        before = "def a(x):\n return x\ndef b(x):\n return x\ndef gone(x):\n return x\n"
+        after = "def a(x):\n return x\ndef b(x, y=1):\n return x\ndef added(x):\n return x\n"
+        p = pair_functions(before, after)
+        self.assertEqual(p.matched, ["a"])
+        self.assertEqual(p.sig_changed, ["b"])
+        self.assertEqual(p.added, ["added"])
+        self.assertEqual(p.removed, ["gone"])
+
+    def test_build_function(self):
+        from probe.extract import build_function
+        fn = build_function("import math\ndef f(n: int) -> int:\n return int(math.sqrt(n))\n", "f")
+        self.assertEqual(fn(9), 3)
+
+
+class TestCheckPipeline(unittest.TestCase):
+    def test_example_refactor_end_to_end(self):
+        import io
+        import os
+        from contextlib import redirect_stdout
+
+        from probe import check
+        root = check._repo_root()
+        before = check.source_from_file(os.path.join(root, "examples/calc_before.py"))
+        after = check.source_from_file(os.path.join(root, "examples/calc_after.py"))
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = check.run(before, after, "test", root)
+        out = buf.getvalue()
+        self.assertEqual(code, 1, "should exit 1 when a divergence is caught")
+        self.assertIn("apply_discount", out)
+        self.assertRegex(out, r"apply_discount\s+divergent")
+        self.assertRegex(out, r"score\s+unsupported")
+        self.assertIn("summarize", out)  # signature-changed note
+
+
 if __name__ == "__main__":
     unittest.main()

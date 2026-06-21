@@ -11,6 +11,7 @@ from typing import Callable, List, Optional, Tuple
 EXPECT_EQUIVALENT = "equivalent"      # deterministic + behavior preserved
 EXPECT_DIVERGENT = "divergent"        # deterministic + behavior changed (caught)
 EXPECT_UNVERIFIABLE = "unverifiable"  # not deterministic -> no trustworthy verdict
+EXPECT_UNKNOWN = "unknown"            # real extracted code: no declared intent
 
 
 @dataclass
