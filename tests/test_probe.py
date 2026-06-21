@@ -184,5 +184,55 @@ class TestCheckPipeline(unittest.TestCase):
         self.assertIn("summarize", out)  # signature-changed note
 
 
+class TestSoundness(unittest.TestCase):
+    def test_real_io_refused_even_if_stable(self):
+        # Reading a missing file raises the same error every run (stable), but
+        # it is uncontrolled I/O — must be refused, not certified.
+        def read_it(path: str) -> str:
+            with open(path) as f:
+                return f.read()
+        sc = harness.self_check(read_it, [("definitely_missing_file_xyz",)])
+        self.assertFalse(sc.deterministic)
+        self.assertEqual(sc.cause, harness.CAUSE_IO)
+
+    def test_threads_refused_even_when_not_flickering(self):
+        import threading
+        # Tiny n: the race won't manifest, runs agree — but thread use alone
+        # must make it unverifiable.
+        def tiny(n: int) -> int:
+            box = {"v": 0}
+
+            def w():
+                box["v"] += 1
+            ts = [threading.Thread(target=w) for _ in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            return box["v"]
+        sc = harness.self_check(tiny, [(1,)])
+        self.assertFalse(sc.deterministic)
+        self.assertEqual(sc.cause, harness.CAUSE_CONCURRENCY)
+
+    def test_literal_mining_catches_magic_value_bug(self):
+        from probe.generators import literal_seeds, mine_literals
+
+        def parser(s: str) -> bool:
+            return s in ("yes", "on")
+        lits = mine_literals('def parser(s):\n return s in ("yes", "on")\n', "parser")
+        self.assertIn("on", lits[str])
+        seeds = literal_seeds(parser, lits)
+        self.assertIn(("on",), seeds)
+
+    def test_static_io_capability_detected(self):
+        from probe.extract import io_capability
+        src = ("def f(u: str) -> int:\n"
+               "    from urllib.request import urlopen\n"
+               "    return urlopen(u).getcode()\n")
+        self.assertIsNotNone(io_capability(src, "f"))
+        pure = "def g(x: int) -> int:\n    return x + 1\n"
+        self.assertIsNone(io_capability(pure, "g"))
+
+
 if __name__ == "__main__":
     unittest.main()

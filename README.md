@@ -107,6 +107,38 @@ examples/                            calc_before.py / calc_after.py for probe.ch
 tests/                               unit + end-to-end tests (python3 -m unittest discover -s tests)
 ```
 
+## Soundness (the verifier must never be confidently wrong)
+
+A black-box checker can't *prove* equivalence (the input space is infinite), so
+the one thing it must never do is say "equivalent" when behavior actually
+differs. We measured this honestly: a stratified, not-cherry-picked corpus
+(`experiments/`, run `python3 experiments/measure.py`) scores each verdict
+against author ground truth.
+
+| | naive tally | reality |
+|---|---|---|
+| before soundness work | 75% "verifiable" | 42% trustworthy, **33% confidently wrong** |
+| after soundness work  | 50% "verifiable" | **50% trustworthy, 0% confidently wrong** |
+
+The three fixes that closed the gap:
+
+- **Uncontrolled I/O is refused, not certified.** The harness counts real file
+  and socket access at runtime, and a static scan flags functions that *can*
+  reach the network/subprocess even when the sampled inputs don't. Either way →
+  `unverifiable (uncontrolled-io)`. (Code that routes I/O through the recorded
+  Effects shim stays verifiable.)
+- **Any thread use is unverifiable** — even if the sampled runs happened to
+  agree. A race that didn't manifest is not a guarantee.
+- **Literals are mined from the code** and fed back as inputs, so a bug hinging
+  on a magic value (e.g. a parser that special-cases `"on"`) is caught instead
+  of missed by a fixed value pool.
+
+Residual honest gap: a function whose risky path is only reached by an input the
+generator never produces (e.g. a valid URL string) can still read "equivalent".
+This is the fundamental limit of example-based generation — Hypothesis / coverage
+-guided generation is the real fix, and the I/O static scan already covers the
+common cases.
+
 ## Honesty notes (what this engine does and does not guarantee)
 
 - **Equivalence is structural, not `repr`-based.** Objects with only identity

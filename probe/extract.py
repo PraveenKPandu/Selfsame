@@ -59,6 +59,44 @@ def pair_functions(before_src: str, after_src: str) -> Pairing:
     return p
 
 
+# Modules / calls that mean a function can touch the uncontrolled outside world.
+# Runtime counting (probe.harness) catches I/O that the sampled inputs actually
+# reach; this static scan catches I/O hiding behind inputs we never generated
+# (e.g. urlopen on a garbage string fails at URL parsing, before any socket).
+_IO_MODULES = ("socket", "ssl", "urllib", "http", "requests", "httpx",
+               "ftplib", "smtplib", "telnetlib", "subprocess")
+_IO_CALL_NAMES = {"open", "urlopen", "urlretrieve"}
+_IO_ATTR_NAMES = {"urlopen", "urlretrieve", "system", "popen", "Popen",
+                  "check_output", "check_call", "connect"}
+
+
+def io_capability(src: str, name: str):
+    """Return a reason string if function `name` can perform uncontrolled I/O,
+    else None. Conservative: prefers a false refusal over false confidence."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Import):
+                    for a in sub.names:
+                        if a.name.split(".")[0] in _IO_MODULES:
+                            return "imports %s" % a.name
+                elif isinstance(sub, ast.ImportFrom):
+                    if sub.module and sub.module.split(".")[0] in _IO_MODULES:
+                        return "imports from %s" % sub.module
+                elif isinstance(sub, ast.Call):
+                    f = sub.func
+                    if isinstance(f, ast.Name) and f.id in _IO_CALL_NAMES:
+                        return "calls %s()" % f.id
+                    if isinstance(f, ast.Attribute) and f.attr in _IO_ATTR_NAMES:
+                        return "calls .%s()" % f.attr
+            return None
+    return None
+
+
 def build_function(src: str, name: str):
     """Exec a module source in a fresh namespace and return one function.
 

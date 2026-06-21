@@ -60,7 +60,13 @@ def run_unit(unit: Unit) -> UnitResult:
 
     inputs = _dedup(seeds + generated)
 
+    # Vet BOTH versions: a refactor that introduces threads or real I/O the
+    # original didn't have must also be refused, not certified.
     sc = harness.self_check(unit.original, inputs, unit.fixtures)
+    if sc.deterministic:
+        sc_ref = harness.self_check(unit.refactored, inputs, unit.fixtures)
+        if not sc_ref.deterministic:
+            sc = sc_ref
     if not sc.deterministic:
         res = UnitResult(unit, "unverifiable", cause=sc.cause, witness=sc.witness)
         res.unexpected_unverifiable = unit.expect not in (

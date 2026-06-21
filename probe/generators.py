@@ -11,9 +11,10 @@ Hypothesis is the production upgrade; this is the deterministic stand-in.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import typing
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from .effects import Effects
 
@@ -100,31 +101,84 @@ def _bounded_product(pools: List[List[Any]]) -> List[Tuple]:
     return combos
 
 
-def generate(fn: Callable) -> List[Tuple]:
-    """Build argument tuples for `fn`, excluding any Effects parameter."""
+def _generatable_params(fn: Callable) -> List[Tuple[str, Any]]:
+    """(name, annotation) for each parameter we must generate a value for.
+
+    Skips the Effects parameter, *args/**kwargs, and defaulted parameters
+    (defaults are left as-is so changed-default refactors are exercised). Raises
+    UnsupportedSignature for an unannotated parameter.
+    """
     sig = inspect.signature(fn)
     try:
         hints = typing.get_type_hints(fn)
     except Exception:
         hints = {}
-
-    pools: List[List[Any]] = []
+    out: List[Tuple[str, Any]] = []
     for name, param in sig.parameters.items():
         annotation = hints.get(name, param.annotation)
         if annotation is Effects:
-            continue  # injected by the harness, not generated
+            continue
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
         if param.default is not inspect.Parameter.empty:
-            continue  # leave defaults at their default so refactors that change
-            #           a default value are exercised (seeds can still override)
+            continue
         if annotation is inspect.Parameter.empty:
             raise UnsupportedSignature("parameter %r is unannotated" % name)
-        pools.append(_pool_for(annotation))
+        out.append((name, annotation))
+    return out
 
-    if not pools:
+
+def generate(fn: Callable) -> List[Tuple]:
+    """Build argument tuples for `fn`, excluding any Effects parameter."""
+    params = _generatable_params(fn)
+    if not params:
         return [()]
+    pools = [_pool_for(ann) for _, ann in params]
     return _bounded_product(pools)
+
+
+def mine_literals(source: str, func_name: str) -> Dict[type, List[Any]]:
+    """Collect str/int/float constants used inside `func_name`'s body.
+
+    Feeding these back as inputs catches bugs that hinge on a specific magic
+    value (e.g. a parser that special-cases "on") which a fixed value pool would
+    never produce. A lightweight stand-in for what a smart generator would mine.
+    """
+    found: Dict[type, List[Any]] = {str: [], int: [], float: []}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return found
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant):
+                    v = sub.value
+                    if isinstance(v, bool):
+                        continue
+                    for t in (str, int, float):
+                        if type(v) is t and v not in found[t]:
+                            found[t].append(v)
+    return found
+
+
+def literal_seeds(fn: Callable, literals: Dict[type, List[Any]]) -> List[Tuple]:
+    """Build seed inputs that set one primitive parameter at a time to a mined
+    literal (others at their first pool value)."""
+    try:
+        params = _generatable_params(fn)
+        base = [_pool_for(ann)[0] for _, ann in params]
+    except UnsupportedSignature:
+        return []
+    if not params:
+        return []
+    seeds: List[Tuple] = []
+    for i, (_name, ann) in enumerate(params):
+        for lit in literals.get(ann, []):
+            row = list(base)
+            row[i] = lit
+            seeds.append(tuple(row))
+    return seeds
 
 
 def effects_param(fn: Callable) -> "str | None":
