@@ -1,31 +1,43 @@
 """The core: observe, self-check determinism, diff versions, classify causes.
 
 Observation is the unit of truth. Running a function produces an Observation =
-(return value | exception) + the ordered trace of recorded effects. Two runs are
-"the same" iff their Observations are equal.
+(return value | exception) + the ordered trace of recorded effects. Two
+Observations are "the same" iff their values, exceptions, and traces are
+structurally equal (see probe.equality — NOT repr).
 
 Pipeline per unit:
-  1. self_check  -- run `original` 3x per input under a controlled environment.
-                    If the three disagree, the unit is UNVERIFIABLE and we
-                    classify why (concurrency / uncontrolled-time /
-                    uncontrolled-entropy / unknown). Negative control: stable
-                    code must never be flagged.
+  1. self_check  -- run `original` RUNS_PER_INPUT times per input under a
+                    controlled environment. If the runs disagree, the unit is
+                    UNVERIFIABLE and we classify why (concurrency /
+                    uncontrolled-time / uncontrolled-entropy / unknown). Negative
+                    control: stable code must never be flagged.
   2. diff        -- only for deterministic units: run original vs refactored on
                     the same inputs; any Observation mismatch is a caught
                     behavioral divergence.
+
+The controlled environment freezes a broad set of clock sources and seeds a broad
+set of entropy sources. It is deliberately honest about its limits: the
+`from datetime import datetime` capture-at-import pattern cannot be intercepted
+globally, and per-instance `random.Random(...)` objects keep their own state.
+Those gaps surface as `uncontrolled-time` / `uncontrolled-entropy` verdicts
+rather than silent false confidence.
 """
 
 from __future__ import annotations
 
+import datetime as _datetime
 import inspect
 import os
 import random
+import secrets
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .effects import FROZEN_NOW, Effects
+from .equality import equal
 from .generators import effects_param
 
 RUNS_PER_INPUT = 3  # self-check repetitions
@@ -36,94 +48,211 @@ CAUSE_TIME = "uncontrolled-time"
 CAUSE_ENTROPY = "uncontrolled-entropy"
 CAUSE_UNKNOWN = "unknown"
 
+_FROZEN_DT = _datetime.datetime.utcfromtimestamp(FROZEN_NOW)
+
 
 @dataclass
 class Observation:
-    result: Optional[str]          # repr of the return value
+    returned: bool                 # True if it returned, False if it raised
+    value: Any                     # the raw return value (for structural compare)
     exception: Optional[str]       # "ExcType: message", or None
-    trace: Tuple                   # ordered recorded effects
+    trace: Tuple                   # ordered recorded effects (raw)
     counts: Dict[str, int]         # threads / time / entropy calls seen
+    summary: str = ""              # human-readable, for reports only
 
-    def key(self) -> Tuple:
-        """What defines behavioral identity (counts are diagnostics, not behavior)."""
-        return (self.result, self.exception, self.trace)
+    def same_behavior(self, other: "Observation") -> bool:
+        if self.exception != other.exception:
+            return False
+        if self.exception is None:
+            if not equal(self.value, other.value):
+                return False
+        return equal(list(self.trace), list(other.trace))
+
+
+def _summarize(returned: bool, value: Any, exception: Optional[str],
+               trace: Tuple) -> str:
+    try:
+        head = ("raises %s" % exception) if not returned else repr(value)
+    except Exception:
+        head = "<unreprable>"
+    if len(head) > 80:
+        head = head[:77] + "..."
+    if trace:
+        head += "  effects=%d" % len(trace)
+    return head
 
 
 class _Controlled:
-    """Context manager freezing the clock, seeding entropy, and counting the
-    nondeterminism sources a unit reaches into."""
+    """Freeze the clock, seed entropy, and count the nondeterminism sources a
+    unit reaches into. Restores everything on exit."""
 
     def __init__(self) -> None:
         self.counts = {"threads": 0, "time": 0, "entropy": 0}
 
     def __enter__(self) -> "_Controlled":
         c = self.counts
-        self._saved: Dict[str, Any] = {}
+        self._saved: Dict[Any, Any] = {}
 
-        # --- freeze clock, count reads ---
-        for name in ("time", "monotonic", "perf_counter"):
-            self._saved[("time", name)] = getattr(time, name)
+        def time_hit(value):
+            def inner(*a, **k):
+                c["time"] += 1
+                return value
+            return inner
 
-        def _frozen(_n=None):
-            c["time"] += 1
-            return FROZEN_NOW
+        # --- clock sources ---
+        self._time_patches = {
+            "time": time_hit(FROZEN_NOW),
+            "monotonic": time_hit(FROZEN_NOW),
+            "perf_counter": time_hit(FROZEN_NOW),
+            "process_time": time_hit(0.0),
+            "time_ns": time_hit(int(FROZEN_NOW * 1e9)),
+            "monotonic_ns": time_hit(int(FROZEN_NOW * 1e9)),
+            "perf_counter_ns": time_hit(int(FROZEN_NOW * 1e9)),
+        }
+        for name, fn in self._time_patches.items():
+            if hasattr(time, name):
+                self._saved[("time", name)] = getattr(time, name)
+                setattr(time, name, fn)
 
-        time.time = _frozen
-        time.monotonic = _frozen
-        time.perf_counter = _frozen
+        # datetime: best-effort. Patches `datetime.datetime`/`datetime.date` on
+        # the module so `import datetime; datetime.datetime.now()` is frozen.
+        # Cannot catch `from datetime import datetime` (reference captured at
+        # import) — that path stays live and will trip the time classifier.
+        self._saved["dt.datetime"] = _datetime.datetime
+        self._saved["dt.date"] = _datetime.date
 
-        # --- seed entropy so the sequence is identical every run, count reads ---
+        frozen_dt = _FROZEN_DT
+
+        class _FrozenDateTime(_datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                c["time"] += 1
+                return frozen_dt if tz is None else frozen_dt.replace(tzinfo=tz)
+
+            @classmethod
+            def utcnow(cls):
+                c["time"] += 1
+                return frozen_dt
+
+            @classmethod
+            def today(cls):
+                c["time"] += 1
+                return frozen_dt
+
+        class _FrozenDate(_datetime.date):
+            @classmethod
+            def today(cls):
+                c["time"] += 1
+                return frozen_dt.date()
+
+        _datetime.datetime = _FrozenDateTime
+        _datetime.date = _FrozenDate
+
+        # --- entropy sources (seed so the sequence is identical each run) ---
         random.seed(0)
-        self._saved["urandom"] = os.urandom
-        for fname in ("random", "randint", "randrange", "choice",
-                      "shuffle", "uniform", "sample"):
-            self._saved[("random", fname)] = getattr(random, fname)
+        for fname in ("random", "randint", "randrange", "choice", "choices",
+                      "shuffle", "uniform", "sample", "getrandbits"):
+            if hasattr(random, fname):
+                self._saved[("random", fname)] = getattr(random, fname)
 
-        def _wrap_entropy(fn):
+        def wrap_entropy(fn):
             def inner(*a, **k):
                 c["entropy"] += 1
                 return fn(*a, **k)
             return inner
 
-        for fname in ("random", "randint", "randrange", "choice",
-                      "shuffle", "uniform", "sample"):
-            setattr(random, fname, _wrap_entropy(self._saved[("random", fname)]))
+        for fname in ("random", "randint", "randrange", "choice", "choices",
+                      "shuffle", "uniform", "sample", "getrandbits"):
+            if ("random", fname) in self._saved:
+                setattr(random, fname, wrap_entropy(self._saved[("random", fname)]))
 
-        def _det_urandom(n):
+        # os.urandom is the entropy floor for secrets, uuid4, and unseeded
+        # random.Random — making it deterministic controls all of them.
+        self._saved["urandom"] = os.urandom
+
+        def det_urandom(n):
             c["entropy"] += 1
             return bytes((i * 37 + 11) & 0xFF for i in range(n))
 
-        os.urandom = _det_urandom
+        os.urandom = det_urandom
 
-        # --- count threads started (still really run them) ---
+        # `random` (and therefore `random.SystemRandom`, which backs the whole
+        # `secrets` module) captured `urandom` at import as `random._urandom`, so
+        # patching os.urandom alone does NOT reach it. Patch the captured name
+        # too — this is the subtle bit that makes secrets/SystemRandom honest.
+        self._saved["random_urandom"] = getattr(random, "_urandom", None)
+        if hasattr(random, "_urandom"):
+            random._urandom = det_urandom
+
+        # uuid: deterministic sequence + counted.
+        self._saved["uuid4"] = uuid.uuid4
+        self._saved["uuid1"] = uuid.uuid1
+        _uuid_seq = {"n": 0}
+
+        def det_uuid4():
+            c["entropy"] += 1
+            _uuid_seq["n"] += 1
+            return uuid.UUID(int=_uuid_seq["n"], version=4)
+
+        def det_uuid1(node=None, clock_seq=None):
+            c["entropy"] += 1
+            c["time"] += 1
+            _uuid_seq["n"] += 1
+            return uuid.UUID(int=_uuid_seq["n"])
+
+        uuid.uuid4 = det_uuid4
+        uuid.uuid1 = det_uuid1
+
+        # secrets: route through counted, deterministic primitives.
+        for fname in ("token_bytes", "token_hex", "token_urlsafe",
+                      "randbelow", "randbits", "choice"):
+            if hasattr(secrets, fname):
+                self._saved[("secrets", fname)] = getattr(secrets, fname)
+        if hasattr(secrets, "randbelow"):
+            secrets.randbelow = wrap_entropy(self._saved[("secrets", "randbelow")])
+        if hasattr(secrets, "choice"):
+            secrets.choice = wrap_entropy(self._saved[("secrets", "choice")])
+        if hasattr(secrets, "token_bytes"):
+            secrets.token_bytes = wrap_entropy(self._saved[("secrets", "token_bytes")])
+        if hasattr(secrets, "token_hex"):
+            secrets.token_hex = wrap_entropy(self._saved[("secrets", "token_hex")])
+        if hasattr(secrets, "token_urlsafe"):
+            secrets.token_urlsafe = wrap_entropy(self._saved[("secrets", "token_urlsafe")])
+
+        # --- threads: count starts, still really run them ---
         self._saved["thread_start"] = threading.Thread.start
         real_start = self._saved["thread_start"]
 
-        def _counting_start(thread_self, *a, **k):
+        def counting_start(thread_self, *a, **k):
             c["threads"] += 1
             return real_start(thread_self, *a, **k)
 
-        threading.Thread.start = _counting_start
+        threading.Thread.start = counting_start
         return self
 
     def __exit__(self, *exc) -> None:
-        for name in ("time", "monotonic", "perf_counter"):
-            setattr(time, name, self._saved[("time", name)])
-        for fname in ("random", "randint", "randrange", "choice",
-                      "shuffle", "uniform", "sample"):
-            setattr(random, fname, self._saved[("random", fname)])
+        for name in self._time_patches:
+            if ("time", name) in self._saved:
+                setattr(time, name, self._saved[("time", name)])
+        _datetime.datetime = self._saved["dt.datetime"]
+        _datetime.date = self._saved["dt.date"]
+        for key, val in self._saved.items():
+            if isinstance(key, tuple) and key[0] in ("random", "secrets"):
+                setattr(globals()[key[0]] if key[0] == "secrets" else random,
+                        key[1], val)
         os.urandom = self._saved["urandom"]
+        if self._saved.get("random_urandom") is not None:
+            random._urandom = self._saved["random_urandom"]
+        uuid.uuid4 = self._saved["uuid4"]
+        uuid.uuid1 = self._saved["uuid1"]
         threading.Thread.start = self._saved["thread_start"]
 
 
 def _build_call(fn: Callable, args: Tuple, fx: Effects):
-    """Map generated args onto the signature, inserting fx at the Effects slot."""
     ep = effects_param(fn)
     if ep is None:
         return args, {}
-    params = list(inspect.signature(fn).parameters)
-    kwargs = {ep: fx}
-    return args, kwargs
+    return args, {ep: fx}
 
 
 def observe(fn: Callable, args: Tuple, fixtures: Dict = None) -> Observation:
@@ -131,14 +260,17 @@ def observe(fn: Callable, args: Tuple, fixtures: Dict = None) -> Observation:
     fx = Effects(fixtures)
     with _Controlled() as ctrl:
         call_args, call_kwargs = _build_call(fn, args, fx)
-        result: Optional[str] = None
+        returned = True
+        value: Any = None
         exception: Optional[str] = None
         try:
             value = fn(*call_args, **call_kwargs)
-            result = repr(value)
         except Exception as e:  # behavior includes how it fails
+            returned = False
             exception = "%s: %s" % (type(e).__name__, e)
-    return Observation(result, exception, tuple(fx.trace), dict(ctrl.counts))
+    trace = tuple(fx.trace)
+    return Observation(returned, value, exception, trace, dict(ctrl.counts),
+                       _summarize(returned, value, exception, trace))
 
 
 def classify(observations: List[Observation]) -> str:
@@ -159,16 +291,15 @@ def classify(observations: List[Observation]) -> str:
 @dataclass
 class SelfCheck:
     deterministic: bool
-    cause: Optional[str] = None          # set when not deterministic
-    witness: Optional[Tuple] = None      # the input that exposed the flicker
+    cause: Optional[str] = None
+    witness: Optional[Tuple] = None
 
 
 def self_check(fn: Callable, inputs: List[Tuple], fixtures: Dict = None) -> SelfCheck:
     """Run `fn` RUNS_PER_INPUT times per input; flag if any input flickers."""
     for args in inputs:
         runs = [observe(fn, args, fixtures) for _ in range(RUNS_PER_INPUT)]
-        keys = {r.key() for r in runs}
-        if len(keys) > 1:
+        if not all(runs[0].same_behavior(r) for r in runs[1:]):
             return SelfCheck(False, classify(runs), args)
     return SelfCheck(True)
 
@@ -176,7 +307,7 @@ def self_check(fn: Callable, inputs: List[Tuple], fixtures: Dict = None) -> Self
 @dataclass
 class Diff:
     equivalent: bool
-    witness: Optional[Tuple] = None      # input where they diverged
+    witness: Optional[Tuple] = None
     original: Optional[Observation] = None
     refactored: Optional[Observation] = None
 
@@ -187,6 +318,6 @@ def diff(original: Callable, refactored: Callable,
     for args in inputs:
         o = observe(original, args, fixtures)
         r = observe(refactored, args, fixtures)
-        if o.key() != r.key():
+        if not o.same_behavior(r):
             return Diff(False, args, o, r)
     return Diff(True)

@@ -17,6 +17,12 @@ from typing import Any, Callable, List, Tuple
 
 from .effects import Effects
 
+
+class UnsupportedSignature(Exception):
+    """Raised when a parameter's type can't be generated for. The honest
+    alternative to silently feeding `0` and reporting a meaningless verdict."""
+
+
 # Small, fixed, boundary-heavy value pools per type. Order is fixed so runs are
 # reproducible under PYTHONHASHSEED=0.
 _POOLS = {
@@ -73,8 +79,8 @@ def _pool_for(annotation: Any) -> List[Any]:
                 pools.extend(_pool_for(a))
         return pools
 
-    # Unknown / unannotated: a single neutral probe value.
-    return [0]
+    # A type we have no strategy for. Refuse rather than fabricate inputs.
+    raise UnsupportedSignature("no generator for annotation %r" % (annotation,))
 
 
 def _bounded_product(pools: List[List[Any]]) -> List[Tuple]:
@@ -105,6 +111,8 @@ def generate(fn: Callable) -> List[Tuple]:
         if param.default is not inspect.Parameter.empty:
             continue  # leave defaults at their default so refactors that change
             #           a default value are exercised (seeds can still override)
+        if annotation is inspect.Parameter.empty:
+            raise UnsupportedSignature("parameter %r is unannotated" % name)
         pools.append(_pool_for(annotation))
 
     if not pools:

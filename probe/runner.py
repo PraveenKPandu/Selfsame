@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from . import harness
-from .generators import generate
+from .generators import UnsupportedSignature, generate
 from .model import (EXPECT_DIVERGENT, EXPECT_EQUIVALENT, EXPECT_UNVERIFIABLE,
                     Unit)
 
@@ -27,6 +27,7 @@ class UnitResult:
     verdict: str            # equivalent | divergent | unverifiable
     cause: Optional[str] = None
     witness: Optional[tuple] = None
+    detail: Optional[str] = None    # human-readable divergence summary
     # integrity flags
     false_positive: bool = False    # said divergent, author expected equivalent
     missed_catch: bool = False      # said equivalent, author expected divergent
@@ -34,21 +35,30 @@ class UnitResult:
     unexpected_unverifiable: bool = False
 
 
-def _inputs_for(unit: Unit) -> List[tuple]:
-    seeds = list(unit.seeds)
-    generated = generate(unit.original)
+def _dedup(rows: List[tuple]) -> List[tuple]:
     seen = set()
-    inputs = []
-    for args in seeds + generated:
+    out = []
+    for args in rows:
         marker = repr(args)  # args may contain unhashable values (lists, dicts)
         if marker not in seen:
             seen.add(marker)
-            inputs.append(args)
-    return inputs
+            out.append(args)
+    return out
 
 
 def run_unit(unit: Unit) -> UnitResult:
-    inputs = _inputs_for(unit)
+    seeds = list(unit.seeds)
+    try:
+        generated = generate(unit.original)
+    except UnsupportedSignature as e:
+        # No strategy for these inputs. If the author supplied seeds we still
+        # check those; otherwise we honestly report "unsupported" rather than
+        # invent inputs and emit a meaningless verdict.
+        if not seeds:
+            return UnitResult(unit, "unsupported", cause=str(e))
+        generated = []
+
+    inputs = _dedup(seeds + generated)
 
     sc = harness.self_check(unit.original, inputs, unit.fixtures)
     if not sc.deterministic:
@@ -66,6 +76,8 @@ def run_unit(unit: Unit) -> UnitResult:
 
     res = UnitResult(unit, "divergent", witness=d.witness)
     res.false_positive = unit.expect == EXPECT_EQUIVALENT
+    if d.original is not None and d.refactored is not None:
+        res.detail = "%s  ->  %s" % (d.original.summary, d.refactored.summary)
     return res
 
 
@@ -79,7 +91,19 @@ class Report:
 
     @property
     def verifiable(self) -> int:
-        return sum(1 for r in self.results if r.verdict != "unverifiable")
+        # A trustworthy verdict was reached (equivalent or divergent). Both
+        # "unverifiable" (nondeterministic) and "unsupported" (no inputs) count
+        # against coverage — they are changes we could not vouch for.
+        return sum(1 for r in self.results
+                   if r.verdict in ("equivalent", "divergent"))
+
+    @property
+    def unsupported(self) -> int:
+        return sum(1 for r in self.results if r.verdict == "unsupported")
+
+    @property
+    def unverifiable(self) -> int:
+        return sum(1 for r in self.results if r.verdict == "unverifiable")
 
     @property
     def coverage(self) -> float:
@@ -116,7 +140,8 @@ def evaluate(units: List[Unit]) -> Report:
 # Reporting
 # --------------------------------------------------------------------------- #
 
-_GLYPH = {"equivalent": "=", "divergent": "x", "unverifiable": "?"}
+_GLYPH = {"equivalent": "=", "divergent": "x",
+          "unverifiable": "?", "unsupported": "-"}
 
 
 def _line(r: UnitResult) -> str:
@@ -124,8 +149,12 @@ def _line(r: UnitResult) -> str:
     detail = ""
     if r.verdict == "unverifiable":
         detail = "cause=%s" % r.cause
+    elif r.verdict == "unsupported":
+        detail = "(no inputs) %s" % (r.cause or "")
     elif r.verdict == "divergent":
         detail = "caught @ %r" % (r.witness,)
+        if r.detail:
+            detail += "  [%s]" % r.detail
     flag = ""
     if r.false_positive:
         flag = "  <-- FALSE POSITIVE"
@@ -152,19 +181,18 @@ def render(report: Report) -> str:
 
     out.append("")
     out.append("-" * 60)
-    out.append("Units                : %d" % report.total)
-    out.append("Verifiable coverage  : %.0f%%  (%d/%d deterministic)"
+    out.append("Units                  : %d" % report.total)
+    out.append("Verifiable coverage    : %.0f%%  (%d/%d got a trustworthy verdict)"
                % (report.coverage * 100, report.verifiable, report.total))
-    out.append("Divergences caught   : %d" % report.caught)
-    out.append("False positives      : %d" % report.false_positives)
-    out.append("Missed catches       : %d" % report.missed_catches)
-    out.append("Misclassified        : %d" % report.misclassified)
+    out.append("  unverifiable (flicker): %d" % report.unverifiable)
+    out.append("  unsupported (no input): %d" % report.unsupported)
+    out.append("Divergences caught     : %d" % report.caught)
+    out.append("False positives        : %d" % report.false_positives)
+    out.append("Missed catches         : %d" % report.missed_catches)
+    out.append("Misclassified          : %d" % report.misclassified)
 
-    lo, hi = CONFIRM_BAND
-    note = ("in %.0f-%.0f%% confirm band -> re-run in a typed language (Go)"
-            % (lo * 100, hi * 100)) if lo <= report.coverage <= hi else \
-           "outside confirm band (corpus is a tractable stand-in, not a real estimate)"
-    out.append("Coverage note        : %s" % note)
+    out.append("Coverage caveat        : corpus-relative on a hand-built "
+               "stand-in; NOT a real-world estimate (see README)")
 
     out.append("")
     verdict = "PASS — controls fired, zero false positives" if report.integrity_ok \

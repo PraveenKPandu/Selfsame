@@ -66,9 +66,29 @@ run_probe.py                         entry point (fixes hash seed, runs)
 probe/effects.py                     recorded, deterministic effect shims
 probe/generators.py                  type-hint-driven input generation
 probe/harness.py                     observe / self-check / diff / classify (the core)
+probe/equality.py                    structural value equality (not repr)
 probe/runner.py                      orchestration, metrics, thresholds, verdict
 probe/model.py                       Unit dataclass
 units/                               the stratified corpus + positive controls
+tests/                               unit + end-to-end tests (python3 -m unittest discover -s tests)
 ```
+
+## Honesty notes (what this engine does and does not guarantee)
+
+- **Equivalence is structural, not `repr`-based.** Objects with only identity
+  equality are compared by their `__dict__`/`__slots__` state; floats handle
+  `nan`/`-0.0`; an object we cannot introspect is reported *not provably equal*
+  rather than guessed.
+- **Determinism control is broad but bounded.** The harness freezes the clock
+  (`time.*`, `time.*_ns`, `datetime.now/utcnow/today`) and seeds entropy
+  (`random`, `os.urandom`, `random._urandom`, `uuid4/1`, `secrets`). It cannot
+  intercept `from datetime import datetime` (reference captured at import) or
+  per-instance `random.Random(...)`; those surface as an *unverifiable* verdict,
+  never as silent false confidence.
+- **Unsupported inputs are refused, not faked.** If the generator has no strategy
+  for a parameter's type, the unit is reported `unsupported` (counts against
+  coverage) instead of fed a placeholder value.
+- **The coverage % is corpus-relative.** It is a property of this hand-built
+  stand-in corpus, not a real-world estimate. See "To run the real probe".
 # Selfsame
 # Selfsame

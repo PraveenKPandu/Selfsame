@@ -52,9 +52,30 @@ def dedup_ref(xs: List[int]) -> List[int]:
     return list(dict.fromkeys(xs))
 
 
+class Vec:
+    """A plain object with only identity equality (no __eq__). Pre-fix, the
+    harness compared by repr and saw the memory address, so this unit was a
+    guaranteed false divergence even when behavior was identical."""
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+def build_vec_orig(n: int) -> Vec:
+    return Vec(n, n * 2)
+
+
+def build_vec_ref(n: int) -> Vec:
+    v = Vec(n, 0)
+    v.y = n * 2  # same end state, reached differently
+    return v
+
+
 UNITS = [
     Unit("sum_list", "pure", sum_list_orig, sum_list_ref),
     Unit("factorial", "pure", factorial_orig, factorial_ref),
     Unit("normalize_whitespace", "pure", normalize_orig, normalize_ref),
     Unit("dedup_preserve_order", "pure", dedup_orig, dedup_ref),
+    Unit("build_vector_object", "pure", build_vec_orig, build_vec_ref),
 ]
