@@ -168,3 +168,27 @@ speed) silently dropped the inputs that trigger a divergence (e.g. inflection's
 `pluralize("passerby")` at input #108) — a missed catch. So arg-capping is OFF
 by default; speed comes from parallelism + timeout. Heavy repos can opt into
 `PROBE_REPLAY_MAX_ARGS` for speed, explicitly trading divergence coverage.
+
+## 8. Targeted-wrapping capture (removes the profiler tax)
+
+The original capture used a global `sys.setprofile`, which fires on EVERY call in
+the process — pytest's own machinery generates millions — so it was slow and
+needed an event-budget safety valve that, tuned low, *under-captured* normal
+suites. Replaced with an import hook (a `sys.meta_path` finder) that wraps ONLY
+the target modules' functions and methods as they import. Overhead now lands
+solely on calls into the code under test; the event budget is gone.
+
+- Keys come from `__qualname__` at wrap time (accurate for methods, classmethods,
+  staticmethods; closures/`<locals>` are skipped — no more `caseinsensitive`-style
+  not-comparable noise).
+- The wrapper binds args+kwargs to a positional values list (defaults applied),
+  so the capture format and replay are unchanged.
+- A per-key "full" set short-circuits recording once a function hits its sample
+  cap, so a stress suite calling one method millions of times stays cheap.
+
+Effects: the sortedcontainers stress capture that *hung* under the profiler now
+finishes in seconds; sortedcontainers coverage rose 86% -> 94% (cleaner method
+wrapping, 0 not-comparable); inflection stays 100% with all divergences caught.
+Capture isn't limited to imported modules' code — functions defined in the
+entry-point script (`__main__`) aren't wrapped, but real code under test lives in
+imported modules.

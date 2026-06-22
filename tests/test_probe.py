@@ -279,24 +279,22 @@ class TestReplayLogic(unittest.TestCase):
 
 
 class TestCaptureReplayUnits(unittest.TestCase):
-    def test_qualname_function_method_classmethod(self):
+    def test_wrap_records_bound_values(self):
+        import pickle
+
         from probe import _capture_hook as hook
+        hook._records.clear()
+        hook._seen.clear()
 
-        def f(x):
-            return x
+        def f(x, y=2):
+            return x + y
 
-        class C:
-            def m(self, x):
-                return x
-
-            def cm(cls, x):  # name only; first param 'cls' is what matters
-                return x
-
-        # method -> <class qualname>.<name>; classmethod uses the class arg;
-        # plain function -> just its name.
-        self.assertEqual(hook._qualname(f.__code__, [1]), "f")
-        self.assertEqual(hook._qualname(C.m.__code__, [C(), 1]), C.__qualname__ + ".m")
-        self.assertEqual(hook._qualname(C.cm.__code__, [C, 1]), C.__qualname__ + ".cm")
+        wrapped = hook._wrap(f, "m::f")
+        self.assertEqual(wrapped(1), 3)       # transparent
+        self.assertEqual(wrapped(1, 5), 6)
+        vals = [pickle.loads(b) for b in hook._records["m::f"]]
+        self.assertIn([1, 2], vals)           # defaults applied
+        self.assertIn([1, 5], vals)
 
     def test_module_prefix_match(self):
         from probe import _capture_hook as hook
@@ -426,14 +424,20 @@ class TestChangedDetection(unittest.TestCase):
 
 class TestProductionCapture(unittest.TestCase):
     def test_capture_from_arbitrary_command(self):
+        import os
         import sys
+        import tempfile
 
         from probe.capture import capture_command
-        # capture from a plain script run (not a test runner)
-        code = "def f(x):\n    return x\nfor i in range(3):\n    f(i)\n"
-        recs = capture_command(["__main__"], [sys.executable, "-c", code])
-        self.assertIn("__main__::f", recs)
-        self.assertEqual(len(recs["__main__::f"]), 3)
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "mymod.py"), "w") as f:
+            f.write("def f(x):\n    return x * 2\n")
+        # capture from a plain script run (not a test runner); the target module
+        # is imported, so targeted wrapping records its calls.
+        code = "import mymod\nfor i in range(3):\n    mymod.f(i)\n"
+        recs = capture_command(["mymod"], [sys.executable, "-c", code], cwd=d)
+        self.assertIn("mymod::f", recs)
+        self.assertEqual(len(recs["mymod::f"]), 3)
 
 
 class TestCLI(unittest.TestCase):
