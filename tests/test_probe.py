@@ -1327,6 +1327,84 @@ class TestSnapshotDrift(unittest.TestCase):
             shutil.rmtree(repo, ignore_errors=True)
 
 
+class TestPytestPlugin(unittest.TestCase):
+    def _git(self, repo, *a):
+        import subprocess
+        subprocess.check_call(["git", "-C", repo] + list(a),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _make_repo(self, greet_body):
+        import tempfile
+        repo = tempfile.mkdtemp(prefix="probe_plugin_")
+        self._git(repo, "init")
+        self._git(repo, "config", "user.email", "t@t.t")
+        self._git(repo, "config", "user.name", "t")
+        os.makedirs(os.path.join(repo, "app"))
+        open(os.path.join(repo, "app", "__init__.py"), "w").close()
+        with open(os.path.join(repo, "app", "core.py"), "w") as f:
+            f.write("def greet(name):\n    return %s\n" % greet_body)
+        with open(os.path.join(repo, "test_app.py"), "w") as f:
+            f.write("from app.core import greet\n"
+                    "def test_g():\n    assert greet('x')\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "v1")
+        return repo
+
+    def test_session_drift_compare_only(self):
+        import shutil
+
+        from probe import snapshot as S
+        from probe.pytest_plugin import _session_drift
+        repo = self._make_repo("'Hello, ' + name")
+        try:
+            snap = os.path.join(repo, ".selfsame", "snapshot.json")
+            # no baseline yet -> no override, never fails
+            self.assertIsNone(_session_drift(repo, snap))
+            S.record_snapshot(repo, ["app"], [sys.executable, "-m", "pytest", "-q"],
+                              snap, sys.executable)
+            # baseline matches current code -> no drift -> None
+            self.assertIsNone(_session_drift(repo, snap))
+            # introduce a regression -> drift -> override 1 (fail session)
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def greet(name):\n    return 'Hi, ' + name\n")
+            self.assertEqual(_session_drift(repo, snap), 1)
+            # ...unless --selfsame-no-fail
+            self.assertIsNone(_session_drift(repo, snap, no_fail=True))
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_plugin_fails_pytest_on_drift_subprocess(self):
+        import shutil
+        import subprocess
+
+        from probe import snapshot as S
+        repo = self._make_repo("'Hello, ' + name")
+        probe_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = probe_root + os.pathsep + env.get("PYTHONPATH", "")
+        # load our plugin exactly once via -p, regardless of whether an installed
+        # entry point would also auto-load it (double registration is an error).
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        try:
+            snap = os.path.join(repo, ".selfsame", "snapshot.json")
+            S.record_snapshot(repo, ["app"], [sys.executable, "-m", "pytest", "-q"],
+                              snap, sys.executable)
+            # regress, then run pytest WITH the plugin enabled
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def greet(name):\n    return 'Hi, ' + name\n")
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", "-p", "probe.pytest_plugin",
+                 "--selfsame", "-q"],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=180)
+            # tests themselves pass, but the plugin must fail the session on drift
+            self.assertNotEqual(proc.returncode, 0, proc.stdout[-2000:])
+            self.assertIn("[selfsame]", proc.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(repo, ".selfsame",
+                                                         "report.json")))
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
