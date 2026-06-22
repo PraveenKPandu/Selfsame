@@ -1118,6 +1118,44 @@ class TestMachineReports(unittest.TestCase):
             self.assertEqual(cfg, {})     # gracefully absent pre-3.11
 
 
+class TestDriftHandling(unittest.TestCase):
+    def test_added_function_is_skipped_not_error(self):
+        from probe.replay import _verdict
+        b = {"loaded": False, "absent": True}      # not in base
+        h = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        verdict, note, idx, detail = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "skipped")
+        self.assertEqual(note, "added in head")
+
+    def test_removed_function_is_skipped(self):
+        from probe.replay import _verdict
+        b = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        h = {"loaded": False, "absent": True}
+        verdict, _n, _i, _d = _verdict(b, h, [b"x"])
+        self.assertEqual((verdict, _n), ("skipped", "removed in head"))
+
+    def test_signature_change_is_interface_change_not_divergent(self):
+        from probe.replay import _verdict
+        # base raises an arity TypeError (param added in head); head returns a value
+        b = {"loaded": True, "params": ["text"],
+             "obs": [{"exc": "TypeError: f() takes 1 positional argument but 2 "
+                      "were given"}]}
+        h = {"loaded": True, "params": ["text", "flag"],
+             "obs": [{"val": ["str", "ok"]}]}
+        verdict, note, idx, detail = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "interface-change")
+        self.assertIn("added flag", note)
+        self.assertEqual(detail["head_params"], ["text", "flag"])
+
+    def test_real_divergence_still_divergent_when_params_equal(self):
+        from probe.replay import _verdict
+        b = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        h = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 2]}]}
+        verdict, _n, idx, _d = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "divergent")
+        self.assertEqual(idx, 0)
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)

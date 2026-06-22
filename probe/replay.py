@@ -257,6 +257,7 @@ def _write_machine_reports(label, rows, tally, n_timeout, uncovered,
         "equivalent": tally.get("equivalent", 0),
         "divergent": tally.get("divergent", 0),
         "unverifiable": tally.get("unverifiable", 0),
+        "interface_change": tally.get("interface-change", 0),
         "error": tally.get("error", 0) - n_timeout,
         "timeout": n_timeout,
         "skipped": tally.get("skipped", 0),
@@ -282,7 +283,8 @@ def _xml_escape(s):
 def _write_junit(label, rows, path):
     n_fail = sum(1 for r in rows if r[2] == "divergent")
     n_err = sum(1 for r in rows if r[2] == "error")
-    n_skip = sum(1 for r in rows if r[2] in ("skipped", "unverifiable"))
+    n_skip = sum(1 for r in rows
+                 if r[2] in ("skipped", "unverifiable", "interface-change"))
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<testsuite name="selfsame %s" tests="%d" failures="%d" errors="%d" '
              'skipped="%d">' % (_xml_escape(label), len(rows), n_fail, n_err, n_skip)]
@@ -294,7 +296,7 @@ def _write_junit(label, rows, path):
                          % _xml_escape(note))
         elif verdict == "error":
             lines.append('    <error message="%s"/>' % _xml_escape(note))
-        elif verdict in ("skipped", "unverifiable"):
+        elif verdict in ("skipped", "unverifiable", "interface-change"):
             lines.append('    <skipped message="%s"/>' % _xml_escape(note))
         lines.append('  </testcase>')
     lines.append('</testsuite>')
@@ -343,9 +345,11 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
         _write_machine_reports(label, rows, tally, n_timeout, extra or [],
                                json_out, junit_out)
 
+    n_iface = tally.get("interface-change", 0)
+    _marks = {"divergent": "X", "error": "!", "interface-change": "~"}
     for name, n, verdict, note in (r[:4] for r in rows):
-        mark = "X" if verdict == "divergent" else ("!" if verdict == "error" else " ")
-        print("%s %-30s n=%-4d %-13s %s" % (mark, name, n, verdict, note))
+        print("%s %-30s n=%-4d %-13s %s"
+              % (_marks.get(verdict, " "), name, n, verdict, note))
 
     gen_err = sum(1 for r in rows
                   if r[2] == "error" and "No module named" in (r[3] or ""))
@@ -366,8 +370,8 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
               % (verifiable, checked, 100.0 * verifiable / checked))
     print("  verified -> equivalent : %d   divergent : %d   unverifiable : %d"
           % (tally.get("equivalent", 0), n_div, tally.get("unverifiable", 0)))
-    print("  not verified -> skipped : %d   error : %d   timeout : %d"
-          % (n_skipped, n_error, n_timeout))
+    print("  not verified -> skipped : %d   interface-change : %d   error : %d   "
+          "timeout : %d" % (n_skipped, n_iface, n_error, n_timeout))
     if n_div:
         print("  ** %d DIVERGENCE(S): behavior changed at a tested input **" % n_div)
     if n_timeout:
@@ -469,6 +473,13 @@ def _render_obs(o):
     return "?"
 
 
+def _is_arity_error(o):
+    """True if the observation is a 'wrong number of arguments' TypeError — the
+    signature of a function that changed parameters between versions."""
+    e = o.get("exc") or ""
+    return "TypeError" in e and ("argument" in e or "positional" in e)
+
+
 def _decode_blob(blob):
     try:
         return pickle.loads(blob)
@@ -491,6 +502,13 @@ def _verdict(b: Dict, h: Dict, blobs):
     if b.get("error") or h.get("error"):
         msg = b.get("error") or h.get("error")
         return "error", msg, None, {"error": msg}
+    # Added/removed function: present in one version, not the other -> not a
+    # behavior difference, just an interface change. Report 'skipped'.
+    if b.get("absent") or h.get("absent"):
+        if b.get("absent") and h.get("absent"):
+            return "skipped", "absent in both versions", None, {}
+        where = "added in head" if b.get("absent") else "removed in head"
+        return "skipped", where, None, {"interface": where}
     if not b.get("loaded") or not h.get("loaded"):
         return "skipped", "not present in both versions", None, {}
     flag = _unsound(b["obs"]) or _unsound(h["obs"])
@@ -499,8 +517,28 @@ def _verdict(b: Dict, h: Dict, blobs):
     if len(b["obs"]) != len(h["obs"]):
         return "error", "observation count mismatch", None, \
             {"error": "observation count mismatch"}
+    params_differ = (b.get("params") is not None and h.get("params") is not None
+                     and b["params"] != h["params"])
     for i, (ob, oh) in enumerate(zip(b["obs"], h["obs"])):
         if not _same(ob, oh):
+            # A divergence driven by a signature change (one version can't accept
+            # the captured args) is an interface change, not a behavior
+            # regression. We genuinely can't observe both behaviors at this
+            # input, so don't call it 'divergent'.
+            if params_differ and (_is_arity_error(ob) or _is_arity_error(oh)):
+                bp, hp = b["params"] or [], h["params"] or []
+                added = [p for p in hp if p not in bp]
+                removed = [p for p in bp if p not in hp]
+                parts = []
+                if added:
+                    parts.append("added " + ", ".join(added))
+                if removed:
+                    parts.append("removed " + ", ".join(removed))
+                chg = "; ".join(parts) or "parameters reordered"
+                note = ("signature changed (%s) — base and head can't be called "
+                        "with the same captured arguments" % chg)
+                return "interface-change", note, None, \
+                    {"interface": chg, "base_params": bp, "head_params": hp}
             arg = _decode_blob(blobs[i])
             inp, base_s, head_s = _short(arg), _render_obs(ob), _render_obs(oh)
             note = ("@ input #%d\n      input : %s\n      base  : %s"
