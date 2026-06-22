@@ -834,6 +834,66 @@ class TestMutation(unittest.TestCase):
         self.assertEqual(tokens_from_source("def ::: bad"),
                          {"str": [], "int": [], "float": []})
 
+    def test_crossover_combines_two_parents(self):
+        import random
+
+        from probe._mutate import mutate_one
+        # two parents, each "rich" in one position only; crossover must be able to
+        # produce a child rich in BOTH (a from p1, b from p2).
+        p1 = ["A" * 8, "x"]
+        p2 = ["y", "B" * 8]
+        rng = random.Random(0)
+        hit = False
+        for _ in range(400):
+            c = mutate_one(p1, rng, list("xyz"), None, p2)
+            if len(c) == 2 and c[0].count("A") >= 8 and c[1].count("B") >= 8:
+                hit = True
+                break
+        self.assertTrue(hit)
+
+    def test_crossover_skipped_without_partner(self):
+        import random
+
+        from probe._mutate import mutate_one
+        # no partner -> never produces a both-rich child from a single parent
+        p1 = ["A" * 8, "x"]
+        rng = random.Random(1)
+        for _ in range(400):
+            c = mutate_one(p1, rng, list("xyz"), None, None)
+            self.assertFalse(c[1].count("B") >= 8)
+
+    def test_structural_list_ops(self):
+        import random
+
+        from probe._mutate import mutate_one
+        rng = random.Random(0)
+        grew_by_more_than_one = reversed_ = False
+        base = [1, 2, 3]
+        for _ in range(400):
+            out = mutate_one([list(base)], rng, list("xyz"))[0]
+            if len(out) - len(base) >= 2:          # dup_range / multi-insert
+                grew_by_more_than_one = True
+            if out == base[::-1]:                  # reverse op
+                reversed_ = True
+        self.assertTrue(grew_by_more_than_one)
+        self.assertTrue(reversed_)
+
+    def test_structural_dict_ops(self):
+        import random
+
+        from probe._mutate import mutate_one
+        rng = random.Random(0)
+        grew = shrank = False
+        base = {"a": 1, "b": 2}
+        for _ in range(400):
+            out = mutate_one([dict(base)], rng, list("xyz"))[0]
+            if len(out) > len(base):               # add key
+                grew = True
+            if len(out) < len(base):               # del key
+                shrank = True
+        self.assertTrue(grew)
+        self.assertTrue(shrank)
+
     def test_mutate_one_injects_dictionary_token(self):
         import random
 
@@ -846,6 +906,23 @@ class TestMutation(unittest.TestCase):
         for _ in range(300):
             produced.add(mutate_one(["status"], rng, list("xyz"), tokens)[0])
         self.assertIn("deploy", produced)
+
+
+class TestBucketing(unittest.TestCase):
+    def test_bucket_boundaries(self):
+        from probe._cgfuzz_worker import _bucket
+        self.assertEqual([_bucket(n) for n in (1, 2, 3)], [1, 2, 3])
+        self.assertEqual([_bucket(n) for n in (4, 7)], [4, 4])
+        self.assertEqual([_bucket(n) for n in (8, 15)], [8, 8])
+        self.assertEqual([_bucket(n) for n in (16, 31)], [16, 16])
+        self.assertEqual([_bucket(n) for n in (32, 127)], [32, 32])
+        self.assertEqual([_bucket(n) for n in (128, 5000)], [128, 128])
+
+    def test_bucket_distinguishes_loop_depth(self):
+        # same edge, different hit counts -> different coverage keys
+        from probe._cgfuzz_worker import _bucket
+        edge = (10, 11)
+        self.assertNotEqual((edge, _bucket(2)), (edge, _bucket(5)))
 
 
 class TestCLI(unittest.TestCase):
