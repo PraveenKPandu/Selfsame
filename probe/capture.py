@@ -21,11 +21,33 @@ import argparse
 import glob
 import os
 import pickle
+import subprocess
 import sys
 import tempfile
+import time
 from typing import Dict, List
 
 _CAP_PER_FUNC = 300
+# Wall-clock ceiling on the capture command. Hypothesis / pytest-benchmark suites
+# generate enormous call volumes that crawl under the capture hook (a real repo
+# hung for ~40min); this bounds it and proceeds with whatever was captured.
+# 0 disables the budget.
+_CAPTURE_TIMEOUT = int(os.environ.get("PROBE_CAPTURE_TIMEOUT", "300"))
+
+
+def _maybe_disable_benchmark(command: List[str]):
+    """If this is a pytest run, append `-p no:benchmark` so pytest-benchmark's
+    timing loops don't call the target thousands of times under the hook. Safe
+    no-op when the plugin isn't installed. Opt out with PROBE_KEEP_BENCHMARK=1."""
+    if os.environ.get("PROBE_KEEP_BENCHMARK"):
+        return command, False
+    joined = " ".join(command)
+    toks = [os.path.basename(c) for c in command]
+    is_pytest = any(t == "pytest" or t.startswith("pytest") for t in toks) \
+        or ("-m" in command and "pytest" in command)
+    if not is_pytest or "no:benchmark" in joined:
+        return command, False
+    return command + ["-p", "no:benchmark"], True
 
 
 def _repo_root() -> str:
@@ -86,12 +108,37 @@ def capture_command(modules: List[str], command: List[str],
     if funcs:
         env["PROBE_CAPTURE_FUNCS"] = ",".join(funcs)
 
+    command, skipped_bench = _maybe_disable_benchmark(command)
+    if skipped_bench:
+        print("probe: disabled pytest-benchmark for capture (its timing loops "
+              "blow up under the hook; set PROBE_KEEP_BENCHMARK=1 to keep it)",
+              file=sys.stderr)
+
     print("probe: capture dir = %s" % cap_dir, file=sys.stderr)
     print("probe: to snapshot a long-running process without stopping it, run "
           "`probe attach <pid> --capture-dir %s`" % cap_dir, file=sys.stderr)
     from . import _procs
-    _procs.run(command, env=env, cwd=cwd)  # tracked: reaped if probe is killed
-    return _merge(cap_dir)
+    budget = _CAPTURE_TIMEOUT if _CAPTURE_TIMEOUT > 0 else None
+    started = time.monotonic()
+    timed_out = False
+    try:
+        # tracked: reaped if probe is killed; graceful SIGTERM lets the hook flush
+        _procs.run(command, env=env, cwd=cwd, timeout=budget, term_grace=5)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        print("probe: capture exceeded the %ds budget (PROBE_CAPTURE_TIMEOUT) — "
+              "stopping and using inputs captured so far. Heavy suite? "
+              "property-based (hypothesis) or pytest-benchmark tests generate huge "
+              "call volumes; scope with --changed-only or raise the budget."
+              % budget, file=sys.stderr)
+    merged = _merge(cap_dir)
+    elapsed = time.monotonic() - started
+    capped = sum(1 for v in merged.values() if len(v) >= _CAP_PER_FUNC)
+    if not timed_out and (capped >= 3 or (budget and elapsed > budget * 0.5)):
+        print("probe: heavy capture (%.0fs, %d function(s) hit the input cap) — "
+              "if this is a hypothesis/benchmark suite, consider --changed-only "
+              "for faster, scoped runs." % (elapsed, capped), file=sys.stderr)
+    return merged
 
 
 def main(argv=None) -> int:

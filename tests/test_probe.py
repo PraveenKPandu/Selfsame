@@ -980,6 +980,47 @@ class TestWorktreePrep(unittest.TestCase):
         self.assertEqual(replay._copy_generated_sources(".", ".", ["nope_xyz"]), [])
 
 
+class TestCaptureGuards(unittest.TestCase):
+    def test_benchmark_disabled_for_pytest(self):
+        from probe.capture import _maybe_disable_benchmark
+        for cmd in (["python", "-m", "pytest", "-q"], ["pytest"], ["pytest3", "-x"]):
+            out, skipped = _maybe_disable_benchmark(cmd)
+            self.assertTrue(skipped, cmd)
+            self.assertIn("no:benchmark", " ".join(out))
+
+    def test_benchmark_untouched_for_non_pytest(self):
+        from probe.capture import _maybe_disable_benchmark
+        out, skipped = _maybe_disable_benchmark(["python", "-m", "unittest"])
+        self.assertFalse(skipped)
+        self.assertNotIn("no:benchmark", " ".join(out))
+
+    def test_benchmark_idempotent_and_optout(self):
+        from probe.capture import _maybe_disable_benchmark
+        _, s = _maybe_disable_benchmark(["pytest", "-p", "no:benchmark"])
+        self.assertFalse(s)
+        os.environ["PROBE_KEEP_BENCHMARK"] = "1"
+        try:
+            _, s2 = _maybe_disable_benchmark(["pytest"])
+            self.assertFalse(s2)
+        finally:
+            del os.environ["PROBE_KEEP_BENCHMARK"]
+
+    def test_capture_budget_stops_runaway(self):
+        from probe import capture
+        old = capture._CAPTURE_TIMEOUT
+        capture._CAPTURE_TIMEOUT = 2
+        try:
+            t0 = time.monotonic()
+            rec = capture.capture_command(
+                ["nomod_xyz"],
+                [sys.executable, "-c", "import time; time.sleep(60)"])
+            dt = time.monotonic() - t0
+            self.assertLess(dt, 30, "budget did not stop a 60s runaway")
+            self.assertEqual(rec, {})
+        finally:
+            capture._CAPTURE_TIMEOUT = old
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
