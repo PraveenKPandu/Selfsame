@@ -834,6 +834,34 @@ class TestMutation(unittest.TestCase):
         self.assertEqual(tokens_from_source("def ::: bad"),
                          {"str": [], "int": [], "float": []})
 
+    def test_crossover_combines_two_parents(self):
+        import random
+
+        from probe._mutate import mutate_one
+        # two parents, each "rich" in one position only; crossover must be able to
+        # produce a child rich in BOTH (a from p1, b from p2).
+        p1 = ["A" * 8, "x"]
+        p2 = ["y", "B" * 8]
+        rng = random.Random(0)
+        hit = False
+        for _ in range(400):
+            c = mutate_one(p1, rng, list("xyz"), None, p2)
+            if len(c) == 2 and c[0].count("A") >= 8 and c[1].count("B") >= 8:
+                hit = True
+                break
+        self.assertTrue(hit)
+
+    def test_crossover_skipped_without_partner(self):
+        import random
+
+        from probe._mutate import mutate_one
+        # no partner -> never produces a both-rich child from a single parent
+        p1 = ["A" * 8, "x"]
+        rng = random.Random(1)
+        for _ in range(400):
+            c = mutate_one(p1, rng, list("xyz"), None, None)
+            self.assertFalse(c[1].count("B") >= 8)
+
     def test_mutate_one_injects_dictionary_token(self):
         import random
 

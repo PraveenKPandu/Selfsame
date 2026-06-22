@@ -262,12 +262,38 @@ def _dict_value(v, rng, tokens):
     return None
 
 
-def mutate_one(values, rng, alphabet, tokens=None):
+_SPLICE_PROB = 0.25
+
+
+def _crossover(a, b, rng):
+    """Combine two parent arg-lists: per position, take a's value or b's; for
+    matching str/bytes positions, splice a prefix of one onto a suffix of the
+    other. Lets the fuzzer merge a feature from one input with a feature from
+    another — unreachable by single-position mutation."""
+    out = []
+    for i in range(len(a)):
+        if i < len(b) and rng.random() < 0.5:
+            x, y = a[i], b[i]
+            if isinstance(x, str) and isinstance(y, str):
+                out.append(x[:rng.randint(0, len(x))] + y[rng.randint(0, len(y)):])
+            elif isinstance(x, (bytes, bytearray)) and isinstance(y, (bytes, bytearray)):
+                out.append(bytes(x[:rng.randint(0, len(x))]) +
+                           bytes(y[rng.randint(0, len(y)):]))
+            else:
+                out.append(y)        # transplant the partner's value wholesale
+        else:
+            out.append(a[i])
+    return out
+
+
+def mutate_one(values, rng, alphabet, tokens=None, partner=None):
     """Return a new arg-list with one randomly-chosen position mutated — usually
-    via havoc, but sometimes (when `tokens` given) by injecting a dictionary
-    token mined from the target source."""
+    via havoc, but sometimes by splicing with `partner` (crossover) or injecting
+    a dictionary token mined from the target source (`tokens`)."""
     if not values:
         return list(values)
+    if partner and len(partner) == len(values) and rng.random() < _SPLICE_PROB:
+        return _crossover(values, partner, rng)
     out = list(values)
     i = rng.randrange(len(out))
     if tokens and rng.random() < _DICT_PROB:

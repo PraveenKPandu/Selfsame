@@ -165,7 +165,9 @@ def main() -> int:
         while execs < budget and corpus and n_fuzz < cap:
             execs += 1
             base_values = pick()
-            mutated = mutate_one(base_values, rng, alphabet, tokens)
+            # a second energy-weighted parent enables crossover/splice
+            partner = pick() if len(corpus) > 1 else None
+            mutated = mutate_one(base_values, rng, alphabet, tokens, partner)
             cov, outcome = trace_run(mutated)
             # Keep an input that reaches a new EDGE/bucket (branchy or loopy code)
             # OR produces a new OUTPUT (data-driven code where control flow stays
