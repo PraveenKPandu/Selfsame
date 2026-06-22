@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+name-claim/*/dist/
+name-claim/*/build/
+*.egg-info/
+name-claim/npm/node_modules/
+name-claim/crates/target/
