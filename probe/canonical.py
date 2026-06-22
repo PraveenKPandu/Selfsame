@@ -72,6 +72,18 @@ def canonical(value: Any, _depth: int = 0) -> Any:
         items.sort(key=lambda c: json.dumps(c, sort_keys=True))
         return ["dict", items]
 
+    # Callables/classes can't be compared by value; identify them by
+    # module+qualname. Two versions referencing the same function compare equal;
+    # a changed reference is a divergence. Fixes "opaque" state/values that hold
+    # functions (e.g. caches storing function values).
+    if isinstance(value, (types.FunctionType, types.BuiltinFunctionType,
+                          types.MethodType, types.MethodWrapperType,
+                          types.BuiltinMethodType)):
+        return ["callable", getattr(value, "__module__", "?"),
+                getattr(value, "__qualname__", getattr(value, "__name__", "?"))]
+    if isinstance(value, type):
+        return ["class", getattr(value, "__module__", "?"), value.__qualname__]
+
     # range: exact and lazy — represent by its bounds, not by materializing.
     if isinstance(value, range):
         return ["range", value.start, value.stop, value.step]
