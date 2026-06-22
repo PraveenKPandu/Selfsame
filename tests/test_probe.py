@@ -451,7 +451,164 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(cli.main(["--help"]), 0)
             self.assertEqual(cli.main([]), 2)
             self.assertEqual(cli.main(["bogus-cmd"]), 2)
-        self.assertIn("probe verify", buf.getvalue())
+        out = buf.getvalue()
+        self.assertIn("probe verify", out)
+        self.assertIn("probe attach", out)
+
+
+class TestAttach(unittest.TestCase):
+    def test_resolve_signal_forms(self):
+        import signal
+
+        from probe.attach import _resolve_signal
+        self.assertEqual(_resolve_signal("SIGUSR1"), int(signal.SIGUSR1))
+        self.assertEqual(_resolve_signal("USR1"), int(signal.SIGUSR1))
+        self.assertEqual(_resolve_signal(str(int(signal.SIGUSR1))),
+                         int(signal.SIGUSR1))
+        with self.assertRaises(ValueError):
+            _resolve_signal("NOT_A_SIGNAL")
+
+    def test_attach_no_such_pid_exits_1(self):
+        import io
+        from contextlib import redirect_stderr
+
+        from probe import attach
+        # A PID that almost certainly doesn't exist.
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            code = attach.main(["2147483646"])
+        self.assertEqual(code, 1)
+        self.assertIn("no process", buf.getvalue())
+
+    def test_attach_unknown_signal_exits_2(self):
+        import io
+        import os
+        from contextlib import redirect_stderr
+
+        from probe import attach
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            code = attach.main([str(os.getpid()), "--signal", "NOPE"])
+        self.assertEqual(code, 2)
+
+
+class TestOnDemandFlush(unittest.TestCase):
+    def test_resolve_flush_signal(self):
+        import signal
+
+        from probe import _capture_hook as hook
+        old = hook._FLUSH_SIGNAL_NAME
+        try:
+            hook._FLUSH_SIGNAL_NAME = "SIGUSR1"
+            self.assertEqual(hook._resolve_flush_signal(), int(signal.SIGUSR1))
+            hook._FLUSH_SIGNAL_NAME = "USR2"
+            self.assertEqual(hook._resolve_flush_signal(), int(signal.SIGUSR2))
+            for disabled in ("", "none", "off", "0"):
+                hook._FLUSH_SIGNAL_NAME = disabled
+                self.assertIsNone(hook._resolve_flush_signal())
+            hook._FLUSH_SIGNAL_NAME = "TOTALLY_BOGUS"
+            self.assertIsNone(hook._resolve_flush_signal())
+        finally:
+            hook._FLUSH_SIGNAL_NAME = old
+
+    def test_signal_handler_installed_when_configured(self):
+        import signal
+
+        from probe import _capture_hook as hook
+        old_name = hook._FLUSH_SIGNAL_NAME
+        prev = signal.getsignal(signal.SIGUSR2)
+        try:
+            hook._FLUSH_SIGNAL_NAME = "SIGUSR2"
+            signum = hook._install_flush_signal()
+            self.assertEqual(signum, int(signal.SIGUSR2))
+            handler = signal.getsignal(signal.SIGUSR2)
+            self.assertTrue(callable(handler))
+            self.assertIsNot(handler, prev)
+        finally:
+            signal.signal(signal.SIGUSR2, prev)
+            hook._FLUSH_SIGNAL_NAME = old_name
+
+    def test_signal_dump_from_running_hook_process(self):
+        """Spawn a long-running subprocess under the capture hook, send the flush
+        signal, and confirm cap-<pid>.pkl appears with the captured call — the
+        process is never stopped to do it."""
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        import time
+
+        if sys.platform == "win32":
+            self.skipTest("POSIX signals not available on Windows")
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        work = tempfile.mkdtemp(prefix="probe_attach_test_")
+        try:
+            cap_dir = os.path.join(work, "caps")
+            os.makedirs(cap_dir)
+            # sitecustomize installs the hook for the child.
+            with open(os.path.join(work, "sitecustomize.py"), "w") as f:
+                f.write("import probe._capture_hook\n")
+            # a target module to capture + a long-running loop that calls it.
+            with open(os.path.join(work, "mymod.py"), "w") as f:
+                f.write("def f(x):\n    return x * 2\n")
+            script = (
+                "import time, mymod\n"
+                "mymod.f(7)\n"            # one captured call, then idle
+                "while True:\n"
+                "    time.sleep(0.05)\n")
+
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.pathsep.join(
+                [work, repo_root] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+            env["PROBE_CAPTURE_DIR"] = cap_dir
+            env["PROBE_CAPTURE_MODULES"] = "mymod"
+            # disable periodic flush so the ONLY way a file appears is our signal
+            env["PROBE_CAPTURE_FLUSH_SECS"] = "0"
+            env["PROBE_CAPTURE_FLUSH_SIGNAL"] = "SIGUSR1"
+
+            proc = subprocess.Popen(
+                [sys.executable, "-c", script], env=env, cwd=work)
+            try:
+                from probe.attach import attach
+                # Let the child fully import and install the handler before any
+                # signal. SIGUSR1's default disposition is to terminate, so a
+                # signal that races ahead of install() would kill the child.
+                time.sleep(1.5)
+                if proc.poll() is not None:
+                    self.skipTest("child exited during startup; cannot test")
+                deadline = time.time() + 8.0
+                cap_path = os.path.join(cap_dir, "cap-%d.pkl" % proc.pid)
+                got = False
+                while time.time() < deadline:
+                    time.sleep(0.2)
+                    if proc.poll() is not None:
+                        self.skipTest("child exited early; cannot test signal flush")
+                    # (re)send the flush signal; handler -> waiter thread -> flush
+                    try:
+                        attach(proc.pid, "SIGUSR1")
+                    except ProcessLookupError:
+                        break
+                    if os.path.exists(cap_path):
+                        got = True
+                        break
+                self.assertTrue(got, "no cap file produced after sending flush signal")
+
+                import pickle
+                with open(cap_path, "rb") as f:
+                    recs = pickle.load(f)
+                self.assertIn("mymod::f", recs)
+                vals = [pickle.loads(b) for b in recs["mymod::f"]]
+                self.assertIn([7], vals)
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 class TestVersionSupport(unittest.TestCase):

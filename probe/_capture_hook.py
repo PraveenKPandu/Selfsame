@@ -13,6 +13,10 @@ Configured by env vars:
   PROBE_CAPTURE_FUNCS    optional comma-separated allow-list of names/qualnames
   PROBE_CAPTURE_FLUSH_SECS  periodic flush interval (default 5s) so a long-running
                          process killed by SIGTERM still leaves a capture
+  PROBE_CAPTURE_FLUSH_SIGNAL  signal that triggers an on-demand flush of the
+                         current captures without stopping the process (default
+                         SIGUSR1). Set to a signal name ("SIGUSR2") or number, or
+                         to "0"/"none" to disable. `probe attach <pid>` sends it.
 
 Each recorded call is stored as a pickled ``(args, kwargs)`` keyed by
 "module::qualname" (qualname distinguishes methods across classes; the receiver
@@ -33,7 +37,15 @@ _DIR = os.environ.get("PROBE_CAPTURE_DIR")
 _MODULES = tuple(m for m in os.environ.get("PROBE_CAPTURE_MODULES", "").split(",") if m)
 _FUNCS = set(f for f in os.environ.get("PROBE_CAPTURE_FUNCS", "").split(",") if f)
 _FLUSH_SECS = float(os.environ.get("PROBE_CAPTURE_FLUSH_SECS", "5"))
+_FLUSH_SIGNAL_NAME = os.environ.get("PROBE_CAPTURE_FLUSH_SIGNAL", "SIGUSR1")
 _CAP_PER_FUNC = 300
+
+# Set by the on-demand signal handler; a dedicated daemon thread does the actual
+# flush. Doing the flush in the handler itself is unsafe: _flush() takes _lock,
+# and if the signal fires in the main thread while it already holds _lock (inside
+# _record), re-acquiring the non-reentrant lock would deadlock. The handler is
+# kept trivial (set an Event) so it is re-entrancy-safe and never blocks.
+_flush_event = threading.Event()
 
 # Dunders that are unsafe or pointless to wrap (called constantly / recursion).
 _SKIP = {"__getattribute__", "__setattr__", "__getattr__", "__delattr__",
@@ -234,6 +246,67 @@ def _periodic_flush():
         _flush()
 
 
+# --------------------------------------------------------------------------- #
+# On-demand flush (signal-triggered)
+# --------------------------------------------------------------------------- #
+def _resolve_flush_signal():
+    """Resolve PROBE_CAPTURE_FLUSH_SIGNAL to an int signal number, or None if
+    disabled / unavailable on this platform. Accepts a name ("SIGUSR1"), a bare
+    number ("10"), or "0"/"none"/"" to disable."""
+    import signal as _signal
+    raw = (_FLUSH_SIGNAL_NAME or "").strip()
+    if not raw or raw.lower() in ("none", "off", "0"):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    sig = getattr(_signal, raw, None) or getattr(_signal, "SIG" + raw, None)
+    if sig is None:
+        return None
+    return int(sig)
+
+
+def _flush_waiter():
+    """Daemon thread: blocks until the signal handler sets the event, then
+    flushes. Keeps all flush work (and the lock) off the signal handler."""
+    while True:
+        _flush_event.wait()
+        _flush_event.clear()
+        _flush()
+
+
+def _install_flush_signal():
+    """Install the on-demand flush signal handler. Best-effort and conservative:
+    only from the main thread (Python requires it), chained to any pre-existing
+    handler so we never silently swallow the app's own, and fully guarded so a
+    failure here can never break the target process."""
+    import signal as _signal
+    try:
+        signum = _resolve_flush_signal()
+        if signum is None:
+            return None
+        if threading.current_thread() is not threading.main_thread():
+            return None  # signal.signal() only works in the main thread
+        prev = _signal.getsignal(signum)
+
+        def _handler(sig, frame, _prev=prev):
+            # Re-entrancy-safe: just wake the waiter thread; no lock, no I/O.
+            _flush_event.set()
+            # Be a good citizen: chain to a real pre-existing handler if any.
+            if callable(_prev) and _prev not in (_signal.SIG_DFL, _signal.SIG_IGN):
+                try:
+                    _prev(sig, frame)
+                except Exception:
+                    pass
+
+        _signal.signal(signum, _handler)
+        threading.Thread(target=_flush_waiter, daemon=True).start()
+        return signum
+    except Exception:
+        return None
+
+
 def install():
     if not _DIR or not _MODULES:
         return
@@ -248,6 +321,9 @@ def install():
     atexit.register(_flush)
     if _FLUSH_SECS > 0:
         threading.Thread(target=_periodic_flush, daemon=True).start()
+    # On-demand flush so a long-running hook-enabled process can be snapshotted
+    # without being stopped (see `probe attach`).
+    _install_flush_signal()
 
 
 install()
