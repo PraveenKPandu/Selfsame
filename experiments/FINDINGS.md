@@ -634,3 +634,28 @@ the inputs the accepted build's tests exercised (a change on an untested path wo
 register — the blind-spot report names those). Value compounds as the baseline's
 test coverage grows. Still deferred: N-way differential of multiple generations,
 pytest-plugin auto-run.
+
+## 22. pytest plugin: auto-run drift (compare-only)
+
+Discoverability was the gap — the tool only helps if it runs. Shipped a pytest
+plugin (pytest11 entry point) so a drift check runs at the end of a normal
+`pytest`, no separate command. Enable with `--selfsame` or `selfsame = true` in
+pytest ini.
+
+COMPARE-ONLY by design: at session end it replays the accepted baseline's stored
+inputs against the current code and reports deviation, and it NEVER re-baselines.
+A regression therefore can't silently become the new "correct" behavior — you
+bless a new accepted build explicitly with `selfsame snapshot ... -- pytest -q`.
+On drift it fails the pytest session (exit nonzero) unless `--selfsame-no-fail`.
+
+Verified live: an installed entry point auto-discovers under `pytest --selfsame`,
+catches a regression (greet 'Hello'->'Hi'), writes .selfsame/report.json, exits 1;
+clean code exits 0; --selfsame-no-fail reports without failing. Works under both
+the repo's CI (`python -m unittest`) and pytest. Note: passing `-p
+probe.pytest_plugin` AND having the entry point installed double-registers (pytest
+error) — the subprocess test sets PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 to load it once
+deterministically. Suite 110 -> 112.
+
+What's left of the original AI-fit list: only N-way generation diff, deliberately
+deferred (creation-time, heuristic/non-sound, 3x generation cost — doesn't serve
+the protect-the-baseline mission).
