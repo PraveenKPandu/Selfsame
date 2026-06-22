@@ -138,3 +138,33 @@ Each repo surfaced real defects, all fixed:
   loop drops from a long profiled run to ~1.6s).
 
 A sixth repo (boltons) found no new bugs — the engine had stabilized.
+
+## 7. Python-version matching is critical; replay performance
+
+Running the probe means running the *target's* code and tests, so the probe must
+use a Python the target supports. cachetools' HEAD requires `>= 3.10`; under the
+machine's 3.9 its tests couldn't import and capture got nothing (0%). Under a
+3.10 venv it produced a real verdict: **41% sound, 0 false confidence** (cache
+classes carry opaque internal state in many captured instances -> soundly
+refused; LFUCache operations on large captured caches hit the worker timeout ->
+not-comparable, also honest).
+
+Fixes:
+
+- **`--python /path/to/pythonX.Y`** on `probe.verify` runs the test command and
+  the replay workers under that interpreter (the orchestrator can stay on any
+  Python). The target's `requires-python` is read from pyproject/setup.cfg and a
+  mismatch is reported loudly ("declares requires-python >= 3.10 ... Pass
+  --python ...") instead of silently capturing nothing.
+- **Replay parallelism**: per-function checks run concurrently (each spawns two
+  short-lived worker subprocesses). cachetools dropped from ~25 min to ~3 min.
+- **Worker timeout** (`PROBE_WORKER_TIMEOUT`): a function whose replay can't
+  finish in budget is reported `timeout` (not-comparable) — never a false pass.
+- **Lower default capture budget** (600k events): a test runner's own startup
+  generates millions of calls; the old 3M default let the profiler crawl.
+
+Correctness note: an earlier attempt to cap replayed args per function (for
+speed) silently dropped the inputs that trigger a divergence (e.g. inflection's
+`pluralize("passerby")` at input #108) — a missed catch. So arg-capping is OFF
+by default; speed comes from parallelism + timeout. Heavy repos can opt into
+`PROBE_REPLAY_MAX_ARGS` for speed, explicitly trading divergence coverage.
