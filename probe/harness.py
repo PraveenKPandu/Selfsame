@@ -302,7 +302,7 @@ def observe(fn: Callable, args: Tuple, fixtures: Dict = None) -> Observation:
         exception: Optional[str] = None
         try:
             value = fn(*call_args, **call_kwargs)
-        except Exception as e:  # behavior includes how it fails
+        except (Exception, SystemExit) as e:  # SystemExit: argparse etc. exiting
             returned = False
             exception = "%s: %s" % (type(e).__name__, e)
     trace = tuple(fx.trace)

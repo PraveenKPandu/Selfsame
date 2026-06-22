@@ -66,8 +66,14 @@ def capture_command(modules: List[str], command: List[str],
         f.write("import probe._capture_hook  # installed by probe.capture\n")
 
     env = dict(os.environ)
+    extra = [work, _repo_root()]
+    if cwd:  # make the project importable during its tests (flat or src layout)
+        extra.append(cwd)
+        src = os.path.join(cwd, "src")
+        if os.path.isdir(src):
+            extra.append(src)
     env["PYTHONPATH"] = os.pathsep.join(
-        [work, _repo_root()] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+        extra + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env["PROBE_CAPTURE_DIR"] = cap_dir
     env["PROBE_CAPTURE_MODULES"] = ",".join(modules)
     if funcs:
