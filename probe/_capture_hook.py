@@ -395,11 +395,18 @@ def _flush():
             return
         snapshot = {k: list(v) for k, v in _records.items()}
     path = os.path.join(_DIR, "cap-%d.pkl" % os.getpid())
+    # Write atomically (temp + replace) so a concurrent reader (e.g. `probe
+    # attach` or a periodic dump) never sees a half-written file.
+    tmp = "%s.%d.tmp" % (path, os.getpid())
     try:
-        with open(path, "wb") as f:
+        with open(tmp, "wb") as f:
             pickle.dump(snapshot, f)
+        os.replace(tmp, path)
     except Exception:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _periodic_flush():

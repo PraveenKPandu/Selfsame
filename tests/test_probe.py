@@ -905,9 +905,10 @@ class TestOnDemandFlush(unittest.TestCase):
                 time.sleep(1.5)
                 if proc.poll() is not None:
                     self.skipTest("child exited during startup; cannot test")
+                import pickle
                 deadline = time.time() + 8.0
                 cap_path = os.path.join(cap_dir, "cap-%d.pkl" % proc.pid)
-                got = False
+                recs = None
                 while time.time() < deadline:
                     time.sleep(0.2)
                     if proc.poll() is not None:
@@ -917,15 +918,18 @@ class TestOnDemandFlush(unittest.TestCase):
                         attach(proc.pid, "SIGUSR1")
                     except ProcessLookupError:
                         break
+                    # The file may exist mid-write; only accept it once it loads
+                    # cleanly with the expected key (avoids an EOFError race).
                     if os.path.exists(cap_path):
-                        got = True
-                        break
-                self.assertTrue(got, "no cap file produced after sending flush signal")
-
-                import pickle
-                with open(cap_path, "rb") as f:
-                    recs = pickle.load(f)
-                self.assertIn("mymod::f", recs)
+                        try:
+                            with open(cap_path, "rb") as f:
+                                loaded = pickle.load(f)
+                        except (EOFError, pickle.UnpicklingError):
+                            continue
+                        if "mymod::f" in loaded:
+                            recs = loaded
+                            break
+                self.assertIsNotNone(recs, "no readable cap file after flush signal")
                 vals = [pickle.loads(b) for b in recs["mymod::f"]]
                 self.assertIn([7], vals)
             finally:
