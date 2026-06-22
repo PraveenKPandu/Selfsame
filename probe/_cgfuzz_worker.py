@@ -1,7 +1,8 @@
 """Coverage-guided exploration worker (AFL-style feedback loop).
 
 Runs in the head worktree. Starting from captured seeds, it repeatedly: pick a
-corpus input, havoc-mutate it (probe._mutate.mutate_one), run the function while
+corpus input (energy-weighted — fresh/smaller inputs preferred), havoc-mutate it
+(probe._mutate.mutate_one), run the function while
 tracing which branch EDGES (prev_line -> cur_line) of the target module execute,
 and — if the run hit a *new* edge — keep the mutated input in the corpus. Edge
 coverage drills through nested branches that blind one-shot mutation can't reach.
@@ -62,6 +63,7 @@ def main() -> int:
         covered = set()
         seen_outcomes = set()   # distinct head outputs/exceptions seen
         corpus = []             # (values, origin, blob)
+        energy = []             # times each corpus entry has been chosen (parallel)
         seen = set()
 
         def trace_run(values):
@@ -111,7 +113,18 @@ def main() -> int:
                 return False
             seen.add(h)
             corpus.append((values, origin, blob))
+            energy.append(0)
             return True
+
+        def pick():
+            # Energy-weighted corpus scheduling: favor inputs chosen FEWER times
+            # (fresh finds get drilled before over-explored seeds) and SMALLER
+            # inputs (cheaper to run, easier to reason about). AFL-style.
+            weights = [1.0 / (1.0 + energy[i]) / (1.0 + len(corpus[i][2]) / 128.0)
+                       for i in range(len(corpus))]
+            idx = rng.choices(range(len(corpus)), weights=weights, k=1)[0]
+            energy[idx] += 1
+            return corpus[idx][0]
 
         for s in seeds:
             if add(s, "seed"):
@@ -124,7 +137,7 @@ def main() -> int:
         n_fuzz = 0
         while execs < budget and corpus and n_fuzz < cap:
             execs += 1
-            base_values = rng.choice(corpus)[0]
+            base_values = pick()
             mutated = mutate_one(base_values, rng, alphabet)
             cov, outcome = trace_run(mutated)
             # Keep an input that reaches a new EDGE (branchy code) OR produces a
