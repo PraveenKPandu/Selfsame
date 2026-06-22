@@ -27,10 +27,15 @@ import subprocess
 import sys
 
 from .capture import capture_command
-from .extract import function_references
+from .extract import changed_keys, function_references
 from .replay import _emit_results, _split_key, _verdict, _worker
 
 _DEFAULT_PATH = os.path.join(".selfsame", "snapshot.json")
+
+
+def _in_modules(key, modules):
+    mod = key.split("::", 1)[0]
+    return any(mod == m or mod.startswith(m + ".") for m in modules)
 
 
 def _git_rev(repo):
@@ -80,7 +85,7 @@ def _drift_row(repo, key, base_out, blobs, python_exe):
 
 
 def check_drift(repo, snapshot_path, python_exe=None, strict=False,
-                report_dir=".selfsame", write_report=True):
+                report_dir=".selfsame", write_report=True, changed_only=False):
     """Replay a snapshot's stored inputs on the working tree and report drift."""
     with open(snapshot_path) as f:
         snap = json.load(f)
@@ -89,6 +94,42 @@ def check_drift(repo, snapshot_path, python_exe=None, strict=False,
         print("snapshot has no records: %s" % snapshot_path)
         return 2
     rev = snap.get("git_rev")
+    modules = snap.get("modules", [])
+    snap_keys = set(records)
+
+    # Functions whose source changed since the snapshot was taken (snapshot rev
+    # -> working tree). Used to scope --changed-only and to find changed code
+    # that has no behavioral baseline (blind spots).
+    changed = None
+    if rev:
+        try:
+            changed = changed_keys(repo, rev, "WORKTREE")
+        except Exception:
+            changed = None
+
+    if changed_only:
+        if changed is None:
+            print("note: --changed-only needs the snapshot's git rev; "
+                  "checking all functions instead.")
+        else:
+            records = {k: v for k, v in records.items() if k in changed}
+            print("scoped to changed functions: %d of %d snapshot function(s) "
+                  "changed since %s (indirect divergences via changed callees "
+                  "may be missed — run full drift to be exhaustive)"
+                  % (len(records), len(snap_keys), rev[:10]))
+
+    # changed since the snapshot but no captured baseline -> can't be verified
+    uncovered = []
+    if changed is not None:
+        uncovered = sorted(k for k in changed
+                           if k not in snap_keys and _in_modules(k, modules))
+
+    if not records:
+        print("\nNo changed-and-baselined functions to check.")
+        if uncovered:
+            print("(%d changed function(s) have no snapshot baseline)" % len(uncovered))
+        return 0
+
     print("Drift vs snapshot %s%s  (%d functions)"
           % (snapshot_path, (" @ " + rev[:10]) if rev else "", len(records)))
     print("=" * 74)
@@ -106,12 +147,12 @@ def check_drift(repo, snapshot_path, python_exe=None, strict=False,
             rows.append(row)
     rows.sort(key=lambda r: r[0])
 
-    refs = function_references(repo, set(records))
+    refs = function_references(repo, set(records) | set(uncovered))
     env = {"python": python_exe or sys.executable, "snapshot": snapshot_path,
-           "snapshot_rev": rev, "modules": ",".join(snap.get("modules", []))}
+           "snapshot_rev": rev, "modules": ",".join(modules)}
     return _emit_results("snapshot..WORKTREE", rows, strict=strict, refs=refs,
                          env=env, report_dir=report_dir, write_report=write_report,
-                         header="Functions in snapshot")
+                         extra=uncovered, header="Functions checked")
 
 
 def record_main(argv=None) -> int:
@@ -163,6 +204,10 @@ def drift_main(argv=None) -> int:
                     help="interpreter to run replay workers under")
     ap.add_argument("--strict", action="store_true",
                     help="exit 3 if any function could not be verified")
+    ap.add_argument("--changed-only", action="store_true",
+                    help="only replay functions whose source changed since the "
+                         "snapshot (faster at high change volume; may miss "
+                         "indirect divergences via changed callees)")
     ap.add_argument("--report-dir", default=".selfsame")
     ap.add_argument("--no-report", action="store_true")
     ns = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
@@ -174,4 +219,4 @@ def drift_main(argv=None) -> int:
         return 2
     return check_drift(repo, ns.snapshot, python_exe=ns.python or sys.executable,
                        strict=ns.strict, report_dir=ns.report_dir,
-                       write_report=not ns.no_report)
+                       write_report=not ns.no_report, changed_only=ns.changed_only)
