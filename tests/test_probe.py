@@ -403,6 +403,27 @@ class TestCallableRepresentation(unittest.TestCase):
         self.assertFalse(equal({"cb": g}, {"cb": len}))
 
 
+class TestChangedDetection(unittest.TestCase):
+    def test_path_to_module(self):
+        from probe.extract import _path_to_module
+        self.assertEqual(_path_to_module("src/pkg/__init__.py"), "pkg")
+        self.assertEqual(_path_to_module("pkg/sub.py"), "pkg.sub")
+        self.assertEqual(_path_to_module("mod.py"), "mod")
+
+    def test_func_segments_includes_methods(self):
+        from probe.extract import _func_segments
+        src = "def f(x):\n    return x\nclass C:\n    def m(self):\n        return 1\n"
+        segs = _func_segments(src)
+        self.assertIn("f", segs)
+        self.assertIn("C.m", segs)
+
+    def test_func_segments_detects_body_change(self):
+        from probe.extract import _func_segments
+        a = _func_segments("def f(x):\n    return x\n")
+        b = _func_segments("def f(x):\n    return x + 1\n")
+        self.assertNotEqual(a["f"], b["f"])
+
+
 class TestVersionSupport(unittest.TestCase):
     def test_requires_python_from_pyproject(self):
         import os
