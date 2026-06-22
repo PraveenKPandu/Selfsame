@@ -189,10 +189,6 @@ solely on calls into the code under test; the event budget is gone.
 Effects: the sortedcontainers stress capture that *hung* under the profiler now
 finishes in seconds; sortedcontainers coverage rose 86% -> 94% (cleaner method
 wrapping, 0 not-comparable); inflection stays 100% with all divergences caught.
-Capture isn't limited to imported modules' code — functions defined in the
-entry-point script (`__main__`) aren't wrapped, but real code under test lives in
-imported modules.
-
 ## 9. Public-interface snapshots for stateful classes
 
 Previously `canonical(obj)` for a general object compared its private
@@ -243,3 +239,29 @@ so set members without a real `__eq__` degrade to identity comparison — this c
 only produce a conservative NOT-equal, never a false positive. The benefit is
 scoped to Sequence/Set; arbitrary domain objects whose observable interface is
 methods (not iteration) still fall back to private state or refuse.
+## 10. Capturing the entry-point script (`__main__`)
+
+The import hook can only wrap modules that are *imported*. The script you run
+directly (`python myscript.py`) executes as module `__main__` — its top-level
+functions are never imported, so `probe capture --modules __main__ -- python
+myscript.py` captured nothing from the script's own code. Fixed by adding a
+*scoped* `sys.setprofile` that records ONLY calls whose defining module
+(`frame.f_globals['__name__']`) matches a target. It is installed **only when the
+entry module is itself a target** (detected via `sys.modules['__main__'].__name__`
+at hook-install time), so:
+
+- A normal test-runner invocation (targets = imported library modules) never
+  installs the profile — the import-hook path is untouched and pays zero
+  profiler tax. A regression test asserts `sys.getprofile() is None` in that case.
+- When the profile *is* on (a single app run, not millions of pytest-internal
+  calls), the callback filters on `__name__` before any work, so non-target calls
+  cost one dict lookup + a membership test and are dropped.
+
+Records use the identical format and keys as the import-hook path
+(`__main__::qualname`, a pickled positional values list with defaults applied;
+varargs fall back to positional-only; `<locals>`/lambdas and class/module bodies
+are skipped via `CO_OPTIMIZED`). The args-binding/dedup/cap logic is shared
+(`_store`), so captures merge and replay identically. Exact method qualnames work
+even pre-3.11 (no `code.co_qualname`) via a lazily-built code→qualname index over
+the entry module's namespace. The hook is fully defensive: any failure to record
+is swallowed and never disturbs the script under capture.

@@ -591,6 +591,149 @@ class TestProductionCapture(unittest.TestCase):
         self.assertEqual(len(recs["mymod::f"]), 3)
 
 
+class TestEntryScriptCapture(unittest.TestCase):
+    """Capturing functions/methods defined in the entry-point script (__main__),
+    which the import hook cannot wrap because __main__ is executed, not imported.
+    A scoped sys.setprofile records them, keyed identically to the import path."""
+
+    def _run(self, body, modules=None):
+        import os
+        import sys
+        import tempfile
+
+        from probe.capture import capture_command
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "the_script.py"), "w") as f:
+            f.write(body)
+        return capture_command(modules or ["__main__"],
+                               [sys.executable, "the_script.py"], cwd=d)
+
+    def test_top_level_function_captured_as_main(self):
+        import pickle
+        recs = self._run(
+            "def add(x, y=10):\n"
+            "    return x + y\n"
+            "if __name__ == '__main__':\n"
+            "    add(1)\n"
+            "    add(2, 3)\n"
+            "    add(2, 3)\n"  # duplicate -> deduped
+        )
+        self.assertIn("__main__::add", recs)
+        vals = sorted(pickle.loads(b) for b in recs["__main__::add"])
+        # defaults applied (y=10) and duplicates collapsed
+        self.assertEqual(vals, [[1, 10], [2, 3]])
+
+    def test_static_method_keyed_with_qualname(self):
+        import pickle
+        recs = self._run(
+            "class Calc:\n"
+            "    @staticmethod\n"
+            "    def helper(z):\n"
+            "        return z - 1\n"
+            "if __name__ == '__main__':\n"
+            "    Calc.helper(9)\n"
+        )
+        self.assertIn("__main__::Calc.helper", recs)
+        self.assertEqual([pickle.loads(b) for b in recs["__main__::Calc.helper"]], [[9]])
+
+    def test_varargs_records_positional_only(self):
+        import pickle
+        recs = self._run(
+            "def variadic(a, *rest, **kw):\n"
+            "    return a\n"
+            "if __name__ == '__main__':\n"
+            "    variadic(7, 8, 9, k=1)\n"
+        )
+        self.assertIn("__main__::variadic", recs)
+        # mirrors _record's varargs fallback: positional values only, kwargs dropped
+        self.assertEqual([pickle.loads(b) for b in recs["__main__::variadic"]], [[7, 8, 9]])
+
+    def test_class_body_and_closures_excluded(self):
+        recs = self._run(
+            "def outer():\n"
+            "    def inner(z):\n"  # <locals> closure -> skipped
+            "        return z\n"
+            "    return inner(1)\n"
+            "class C:\n"
+            "    X = 1\n"  # class body -> not a function, must not be recorded
+            "if __name__ == '__main__':\n"
+            "    outer()\n"
+        )
+        self.assertIn("__main__::outer", recs)
+        self.assertNotIn("__main__::C", recs)            # class body excluded
+        self.assertNotIn("__main__::outer.<locals>.inner", recs)  # closure excluded
+        for k in recs:
+            self.assertNotIn("<", k)
+
+    def test_record_format_is_replay_compatible(self):
+        # Each value must be a pickled positional list so replay can call
+        # fn(*values) (same format as the import-hook path).
+        import pickle
+        recs = self._run(
+            "def f(a, b):\n"
+            "    return a - b\n"
+            "if __name__ == '__main__':\n"
+            "    f(5, 2)\n"
+        )
+        blobs = recs["__main__::f"]
+        self.assertEqual(len(blobs), 1)
+        values = pickle.loads(blobs[0])
+        self.assertIsInstance(values, list)
+        self.assertEqual(values, [5, 2])
+        # round-trips through replay's base64 transport unchanged
+        import base64
+        b64 = base64.b64encode(blobs[0]).decode("ascii")
+        self.assertEqual(pickle.loads(base64.b64decode(b64)), [5, 2])
+
+    def test_profile_not_installed_for_imported_targets(self):
+        # Soundness/perf guard: when the target is only an imported module (not
+        # the entry script), the scoped profile must stay OFF — no global
+        # setprofile overhead on a test-runner invocation.
+        import os
+        import sys
+        import tempfile
+
+        from probe.capture import capture_command
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "lib.py"), "w") as f:
+            f.write("def g(x):\n    return x + 1\n")
+        with open(os.path.join(d, "probe_state.txt"), "w") as f:
+            f.write("")
+        code = (
+            "import sys, lib\n"
+            "lib.g(1)\n"
+            "import probe._capture_hook as h\n"
+            "open('probe_state.txt','w').write('%s,%s' % "
+            "(h._profile_installed, sys.getprofile() is not None))\n"
+        )
+        recs = capture_command(["lib"], [sys.executable, "-c", code], cwd=d)
+        self.assertIn("lib::g", recs)  # import hook still works
+        with open(os.path.join(d, "probe_state.txt")) as f:
+            state = f.read()
+        self.assertEqual(state, "False,False")
+
+
+class TestEntryScriptCaptureUnit(unittest.TestCase):
+    def test_frame_values_matches_record_format(self):
+        import pickle
+
+        from probe import _capture_hook as hook
+        captured = {}
+
+        def f(x, y=2):
+            # at entry, reconstruct values from this very frame
+            import sys as _sys
+            captured["vals"] = hook._frame_values(_sys._getframe())
+            return x + y
+
+        f(1)
+        self.assertEqual(captured["vals"], [1, 2])  # defaults applied, in order
+        f(3, 4)
+        self.assertEqual(captured["vals"], [3, 4])
+        # confirm picklability (replay transports pickled blobs)
+        self.assertEqual(pickle.loads(pickle.dumps(captured["vals"])), [3, 4])
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
