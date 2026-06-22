@@ -4,6 +4,7 @@ Subcommands:
   probe verify   verify a refactor using the repo's own tests (the main path)
   probe check    check a refactor by generating inputs (two files or git refs)
   probe capture  record real call arguments from a test command
+  probe attach   snapshot a running hook-enabled process's captures (no stop)
   probe replay   replay captured arguments across two refs
   probe demo     run the built-in corpus demo
 """
@@ -28,6 +29,9 @@ def main(argv=None) -> int:
         return run(rest)
     if cmd == "capture":
         from .capture import main as run
+        return run(rest)
+    if cmd == "attach":
+        from .attach import main as run
         return run(rest)
     if cmd == "replay":
         from .replay import main as run

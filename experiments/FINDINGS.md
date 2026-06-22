@@ -265,3 +265,62 @@ are skipped via `CO_OPTIMIZED`). The args-binding/dedup/cap logic is shared
 even pre-3.11 (no `code.co_qualname`) via a lazily-built code→qualname index over
 the entry module's namespace. The hook is fully defensive: any failure to record
 is swallowed and never disturbs the script under capture.
+
+## 11. Attaching to a running process: what actually works, and what doesn't
+
+Goal: snapshot the captures of a long-running process (e.g. a server) on demand
+*without killing it*, and — as far as feasible — attach to a process that is
+already running.
+
+**What we built (robust, in scope): on-demand flush for hook-enabled processes.**
+A process started under `probe capture -- <command>` (any process that ran
+`import probe._capture_hook` with the capture env set) installs a signal handler
+— **SIGUSR1 by default, overridable via `PROBE_CAPTURE_FLUSH_SIGNAL`** (name,
+number, or `0`/`none` to disable). `probe attach <pid>` sends that signal; the
+hook flushes its current records to `cap-<pid>.pkl` in its `PROBE_CAPTURE_DIR`
+and the process keeps running. So "capture from a running server, snapshot now,
+keep it running" works soundly: send the signal repeatedly to take successive
+snapshots; the snapshot is just the standard per-process capture file, mergeable
+and replayable like any other.
+
+Design choices that keep it safe (the signal handler must never crash or hang the
+target):
+- The handler does **no work** beyond `Event.set()`. The actual flush (which
+  takes `_lock` and writes a file) runs on a dedicated daemon thread. Doing the
+  flush inside the handler would risk a deadlock — if the signal fires in the
+  main thread while it already holds `_lock` inside `_record`, re-acquiring the
+  non-reentrant lock in the same thread would hang. Setting an Event is
+  re-entrancy-safe and lock-free.
+- The handler is installed only from `install()`, only in the **main thread**
+  (Python requires `signal.signal` to be called there), and the whole thing is
+  wrapped in try/except so it can never break the target.
+- It **chains to any pre-existing handler** for that signal, so it won't silently
+  swallow an app's own SIGUSR1 use. (Still: pick a signal the app doesn't use, or
+  set `PROBE_CAPTURE_FLUSH_SIGNAL` accordingly. SIGUSR1's *default* disposition is
+  to terminate, so there's a tiny window during interpreter startup, before the
+  hook installs, where a signal would kill the process — send the signal only
+  after the process is up.)
+
+`probe capture` now prints its capture dir and the exact `probe attach` command
+to use, and takes `--capture-dir` so long-running sessions can dump to a known
+path instead of an ephemeral temp dir.
+
+**What we did NOT build, and why (honest limitation): injecting into a fully
+unmodified, already-running process.** Truly instrumenting an arbitrary process
+that was *not* started under the hook requires debugger/code-injection
+(ptrace/gdb, pyrasite/madbg style: attach, call into the live interpreter, exec
+the hook). This is fragile and platform-restricted:
+- **Linux:** needs ptrace permission (`CAP_SYS_PTRACE` or a permissive
+  `yama/ptrace_scope`); often blocked in containers/hardened hosts.
+- **macOS:** SIP and code-signing typically block ptrace of the system/signed
+  Python outright. On the dev machine here (`arm64`, **SIP enabled**, no `gdb`,
+  `pyrasite` not installed; only Apple's signed `lldb`), attaching to a signed
+  Python to inject code is not viable without disabling SIP and/or special
+  entitlements. We did not ship a half-working injection path, because a probe
+  whose cardinal rule is *zero false confidence* must not pretend to instrument a
+  process it cannot.
+
+**Recommended alternative for the unmodified-process case:** start the process
+under `probe capture -- <command>` (or have it `import probe._capture_hook` with
+the capture env set) from the beginning, then use `probe attach` to snapshot it
+on demand. That is the sound, portable path.

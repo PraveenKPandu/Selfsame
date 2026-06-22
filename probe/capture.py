@@ -57,10 +57,18 @@ def _merge(cap_dir: str) -> Dict[str, List[bytes]]:
 
 
 def capture_command(modules: List[str], command: List[str],
-                    funcs: List[str] = None, cwd: str = None) -> Dict[str, List[bytes]]:
-    """Run `command` with the capture hook injected; return merged records."""
+                    funcs: List[str] = None, cwd: str = None,
+                    cap_dir: str = None) -> Dict[str, List[bytes]]:
+    """Run `command` with the capture hook injected; return merged records.
+
+    `cap_dir`, if given, is used as PROBE_CAPTURE_DIR (its location is printed so a
+    long-running process can be snapshotted on demand with `probe attach <pid>`,
+    which writes cap-<pid>.pkl there). If omitted, an ephemeral temp dir is used.
+    """
     work = tempfile.mkdtemp(prefix="probe_cap_")
-    cap_dir = os.path.join(work, "caps")
+    if cap_dir is None:
+        cap_dir = os.path.join(work, "caps")
+    cap_dir = os.path.abspath(cap_dir)
     os.makedirs(cap_dir, exist_ok=True)
     with open(os.path.join(work, "sitecustomize.py"), "w") as f:
         f.write("import probe._capture_hook  # installed by probe.capture\n")
@@ -79,6 +87,9 @@ def capture_command(modules: List[str], command: List[str],
     if funcs:
         env["PROBE_CAPTURE_FUNCS"] = ",".join(funcs)
 
+    print("probe: capture dir = %s" % cap_dir, file=sys.stderr)
+    print("probe: to snapshot a long-running process without stopping it, run "
+          "`probe attach <pid> --capture-dir %s`" % cap_dir, file=sys.stderr)
     subprocess.run(command, env=env, cwd=cwd)
     return _merge(cap_dir)
 
@@ -89,6 +100,11 @@ def main(argv=None) -> int:
                     help="comma-separated module/package names to capture")
     ap.add_argument("--funcs", default=None,
                     help="optional comma-separated name/qualname allow-list")
+    ap.add_argument("--capture-dir", default=None,
+                    help="directory for per-process cap-<pid>.pkl dumps "
+                         "(default: an ephemeral temp dir). Use a stable path for "
+                         "long-running processes so `probe attach` dumps land "
+                         "somewhere you know.")
     ap.add_argument("--out", required=True)
     # everything after `--` is the test command
     raw = list(sys.argv[1:] if argv is None else argv)
@@ -104,7 +120,8 @@ def main(argv=None) -> int:
     funcs = [f for f in ns.funcs.split(",")] if ns.funcs else None
     # Run in the current directory and make it (and its src/) importable, so a
     # flat- or src-layout package under test imports during the command.
-    records = capture_command(modules, command, funcs, cwd=os.getcwd())
+    records = capture_command(modules, command, funcs, cwd=os.getcwd(),
+                              cap_dir=ns.capture_dir)
 
     with open(ns.out, "wb") as f:
         pickle.dump({"records": records}, f)

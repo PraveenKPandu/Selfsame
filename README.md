@@ -113,6 +113,22 @@ For a long-running process (a server you exercise by hand), the hook flushes
 captures every few seconds (`PROBE_CAPTURE_FLUSH_SECS`), so an abrupt SIGTERM/
 SIGKILL still leaves a usable capture file.
 
+You can also snapshot a running, hook-enabled process **on demand without
+stopping it**:
+
+```bash
+# start the process under capture with a known dump directory
+probe capture --modules mypkg --capture-dir ./caps --out caps.pkl -- python -m myapp serve
+# ...later, in another shell, dump its current captures (process keeps running):
+probe attach <pid> --capture-dir ./caps      # writes caps/cap-<pid>.pkl
+```
+
+`probe attach` sends the hook's flush signal (default SIGUSR1, override with
+`PROBE_CAPTURE_FLUSH_SIGNAL`). This works only for processes started under the
+hook — it does **not** inject into an arbitrary unmodified process (that needs
+ptrace/gdb and is heavily restricted, especially on macOS under SIP; see
+`experiments/FINDINGS.md` §9).
+
 Capture and replay are also available separately (`probe.capture --modules M
 --out caps.pkl -- <test cmd>` then `probe.replay <repo> <base> <head> caps.pkl`).
 
@@ -175,6 +191,7 @@ run_probe.py                         entry point for the corpus demo (fixes hash
 probe/verify.py                      CLI: one-command verify via the repo's tests
 probe/check.py                       CLI: check a real refactor (two files or git refs)
 probe/capture.py                     CLI: capture real call args from any test command
+probe/attach.py                      CLI: on-demand flush of a running hook-enabled process
 probe/_capture_hook.py               capture hook injected into spawned processes
 probe/replay.py                      CLI: replay captured args across two refs (worktrees)
 probe/canonical.py                   JSON canonical value form (cross-process compare)
