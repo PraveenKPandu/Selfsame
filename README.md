@@ -33,11 +33,32 @@ selfsame verify --base main --modules mypkg -- pytest -q
 selfsame verify --base main --modules mypkg --changed-only -- pytest -q
 ```
 
+## Catching regressions without two branches (AI-driven dev)
+
+When code is generated/changed continuously, you often don't have a clean "before"
+branch — you have an **accepted build** and **whatever the next feature did to it**.
+The danger is silent behavioral regression: a new feature ships, but existing
+functionality quietly broke. Freeze the accepted behavior, then measure deviation:
+
+```bash
+selfsame snapshot --modules mypkg -- pytest -q   # freeze the accepted build
+# ... develop / generate the next feature ...
+selfsame drift                                   # exit 1 if behavior deviated
+```
+
+`drift` replays the *same* inputs the accepted build was characterized on against
+the current code and reports each deviation (with base-vs-head witness and
+`file:line`), writing the same agent-consumable `.selfsame/report.json`. It
+measures *deviation*, not correctness — and only over the inputs your tests
+exercised (the report names changed functions that have no test coverage).
+
 ## Commands
 
 | command | what it does |
 |---|---|
 | `selfsame verify` | capture inputs from your tests, replay base vs head, per-function/method verdict (+ CI exit code) |
+| `selfsame snapshot` | freeze the current (accepted) build's behavior to a baseline file |
+| `selfsame drift`  | measure how much current code deviated from the snapshot baseline (no second branch) |
 | `selfsame check`  | generate inputs and check two files or two git refs |
 | `selfsame capture`| record real call arguments from any test or app command |
 | `selfsame replay` | replay captured arguments across two git refs |
