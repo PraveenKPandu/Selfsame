@@ -324,3 +324,18 @@ the hook). This is fragile and platform-restricted:
 under `probe capture -- <command>` (or have it `import probe._capture_hook` with
 the capture env set) from the beginning, then use `probe attach` to snapshot it
 on demand. That is the sound, portable path.
+
+## 12. No orphaned child processes on interruption
+
+`probe verify` spawns a test command (pytest) and many replay-worker
+subprocesses. If the orchestrator was killed with SIGTERM (e.g.
+`pkill -f probe.verify`) or otherwise interrupted, those children reparented to
+init and kept running — during development this saturated the machine (load 7+)
+and silently starved later runs.
+
+Fix (`probe/_procs.py`): every child is launched in its own session and tracked;
+a SIGTERM/SIGINT/atexit reaper kills the whole child subtree (`killpg`) before the
+orchestrator exits, then re-raises the signal with its default disposition.
+Signal handlers are installed from the main thread (worker threads only register
+their children). Verified end-to-end: SIGTERM to the orchestrator reaps its
+sleeper child (0 survivors); unit tests cover run/timeout/terminate.

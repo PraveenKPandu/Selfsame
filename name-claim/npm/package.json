@@ -1,0 +1,15 @@
+{
+  "name": "selfsame",
+  "version": "0.0.1",
+  "description": "Reserved name for the Selfsame project.",
+  "license": "MIT",
+  "author": "PraveenKPandu",
+  "homepage": "https://github.com/PraveenKPandu/Selfsame",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PraveenKPandu/Selfsame.git"
+  },
+  "main": "index.js",
+  "files": ["index.js", "README.md"],
+  "keywords": ["selfsame"]
+}

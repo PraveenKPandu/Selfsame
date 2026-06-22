@@ -4,7 +4,6 @@ Run: python3 -m unittest discover -s tests
 """
 
 import datetime
-import math
 import secrets
 import time
 import unittest
@@ -419,7 +418,9 @@ class TestReplayLogic(unittest.TestCase):
 
         from probe import replay
         blobs = [pickle.dumps(["q"])]
-        loaded = lambda obs: {"loaded": True, "error": None, "obs": obs}
+
+        def loaded(obs):
+            return {"loaded": True, "error": None, "obs": obs}
         eq = loaded([{"val": ["str", "Q"], "io": 0, "threads": 0}])
         self.assertEqual(replay._verdict(eq, eq, blobs)[0], "equivalent")
         diff = loaded([{"val": ["str", "Z"], "io": 0, "threads": 0}])
@@ -734,6 +735,38 @@ class TestEntryScriptCaptureUnit(unittest.TestCase):
         self.assertEqual(pickle.loads(pickle.dumps(captured["vals"])), [3, 4])
 
 
+class TestProcReaper(unittest.TestCase):
+    def test_run_captures_output(self):
+        import sys
+
+        from probe import _procs
+        r = _procs.run([sys.executable, "-c", "print('hi')"],
+                       capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("hi", r.stdout)
+
+    def test_run_timeout_raises_and_kills(self):
+        import subprocess
+        import sys
+
+        from probe import _procs
+        with self.assertRaises(subprocess.TimeoutExpired):
+            _procs.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+
+    def test_terminate_all_reaps_tracked_child(self):
+        import subprocess
+        import sys
+
+        from probe import _procs
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                             start_new_session=True)
+        with _procs._lock:
+            _procs._live.add(p)
+        _procs._terminate_all()
+        p.wait(timeout=5)
+        self.assertIsNotNone(p.returncode)  # child was killed, not orphaned
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
@@ -872,9 +905,10 @@ class TestOnDemandFlush(unittest.TestCase):
                 time.sleep(1.5)
                 if proc.poll() is not None:
                     self.skipTest("child exited during startup; cannot test")
+                import pickle
                 deadline = time.time() + 8.0
                 cap_path = os.path.join(cap_dir, "cap-%d.pkl" % proc.pid)
-                got = False
+                recs = None
                 while time.time() < deadline:
                     time.sleep(0.2)
                     if proc.poll() is not None:
@@ -884,15 +918,18 @@ class TestOnDemandFlush(unittest.TestCase):
                         attach(proc.pid, "SIGUSR1")
                     except ProcessLookupError:
                         break
+                    # The file may exist mid-write; only accept it once it loads
+                    # cleanly with the expected key (avoids an EOFError race).
                     if os.path.exists(cap_path):
-                        got = True
-                        break
-                self.assertTrue(got, "no cap file produced after sending flush signal")
-
-                import pickle
-                with open(cap_path, "rb") as f:
-                    recs = pickle.load(f)
-                self.assertIn("mymod::f", recs)
+                        try:
+                            with open(cap_path, "rb") as f:
+                                loaded = pickle.load(f)
+                        except (EOFError, pickle.UnpicklingError):
+                            continue
+                        if "mymod::f" in loaded:
+                            recs = loaded
+                            break
+                self.assertIsNotNone(recs, "no readable cap file after flush signal")
                 vals = [pickle.loads(b) for b in recs["mymod::f"]]
                 self.assertIn([7], vals)
             finally:

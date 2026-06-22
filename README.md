@@ -1,28 +1,72 @@
-# Coverage Probe — Implementation
+# Selfsame
 
-A runnable implementation of the go/no-go experiment for the behavior-equivalence
-verifier. It measures **verifiable coverage**: the fraction of code changes where a
-deterministic harness can make a trustworthy equivalence verdict.
+[![CI](https://github.com/PraveenKPandu/Selfsame/actions/workflows/ci.yml/badge.svg)](https://github.com/PraveenKPandu/Selfsame/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/selfsame.svg)](https://pypi.org/project/selfsame/)
+[![Python](https://img.shields.io/pypi/pyversions/selfsame.svg)](https://pypi.org/project/selfsame/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+**Sound behavior-equivalence verification for refactors.** Selfsame checks that a
+refactor didn't change behavior, using your project's *own tests* for inputs: it
+captures real call arguments while your tests (or app) run, replays both versions
+of the code in isolated subprocesses, and compares the results structurally.
+
+> **Guarantee: zero false confidence.** Selfsame never reports `equivalent` when
+> behavior actually differs, or `divergent` when it doesn't. When it can't be
+> sure, it *refuses* (`unverifiable` / `unsupported`) rather than guess.
 
 ## Install
 
 ```bash
-pip install -e .          # provides a `probe` command
-probe demo                # run the built-in corpus
-probe verify --base main --modules mypkg -- pytest -q
+pip install selfsame        # or: pipx install selfsame  ·  uv tool install selfsame
 ```
 
-(Everything also works without installing, via `python3 -m probe.<cmd>` or the
-scripts below.)
+Pure standard library — no runtime dependencies. Installs the `selfsame` command
+(`probe` is a kept alias).
 
-## Run
+## Quickstart
 
 ```bash
-python3 run_probe.py      # or: probe demo
+# Did my working-tree refactor change behavior vs main? (inputs come from your tests)
+selfsame verify --base main --modules mypkg -- pytest -q
+
+# CI mode: only the functions changed in this PR; non-zero exit if any diverged
+selfsame verify --base main --modules mypkg --changed-only -- pytest -q
 ```
 
-No third-party dependencies (pure stdlib). It re-execs once to fix `PYTHONHASHSEED=0`
-so hash/set ordering is controlled for the whole run.
+## Commands
+
+| command | what it does |
+|---|---|
+| `selfsame verify` | capture inputs from your tests, replay base vs head, per-function/method verdict (+ CI exit code) |
+| `selfsame check`  | generate inputs and check two files or two git refs |
+| `selfsame capture`| record real call arguments from any test or app command |
+| `selfsame replay` | replay captured arguments across two git refs |
+| `selfsame attach` | on-demand capture flush from a running, hook-enabled process |
+| `selfsame demo`   | run the built-in corpus end-to-end |
+
+Each verdict is one of: `equivalent` (trustworthy pass), `divergent` (shows the
+input + before→after), `unverifiable` (nondeterministic / uncontrolled I/O — with
+cause), or `unsupported` (no input strategy). Everything also works as
+`python -m probe.<cmd>`.
+
+## Project
+
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Releasing: [RELEASING.md](RELEASING.md)
+- Changelog: [CHANGELOG.md](CHANGELOG.md) · Security: [SECURITY.md](SECURITY.md)
+- Design rationale & validation: [experiments/FINDINGS.md](experiments/FINDINGS.md)
+- License: [MIT](LICENSE)
+
+---
+
+## How it works (the demo)
+
+```bash
+selfsame demo        # or: python3 run_probe.py
+```
+
+The demo runs the engine against a hand-built corpus (`units/`). It's pure stdlib
+and re-execs once to fix `PYTHONHASHSEED=0` so hash/set ordering is controlled for
+the whole run.
 
 ## Check a real refactor
 

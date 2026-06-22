@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "selfsame"
+version = "0.0.1"
+description = "Reserved name for the Selfsame project."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "PraveenKPandu" }]
+
+[project.urls]
+Homepage = "https://github.com/PraveenKPandu/Selfsame"
+
+[tool.setuptools]
+packages = ["selfsame"]

@@ -21,7 +21,6 @@ import argparse
 import glob
 import os
 import pickle
-import subprocess
 import sys
 import tempfile
 from typing import Dict, List
@@ -90,7 +89,8 @@ def capture_command(modules: List[str], command: List[str],
     print("probe: capture dir = %s" % cap_dir, file=sys.stderr)
     print("probe: to snapshot a long-running process without stopping it, run "
           "`probe attach <pid> --capture-dir %s`" % cap_dir, file=sys.stderr)
-    subprocess.run(command, env=env, cwd=cwd)
+    from . import _procs
+    _procs.run(command, env=env, cwd=cwd)  # tracked: reaped if probe is killed
     return _merge(cap_dir)
 
 
