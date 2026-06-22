@@ -980,6 +980,43 @@ class TestWorktreePrep(unittest.TestCase):
         self.assertEqual(replay._copy_generated_sources(".", ".", ["nope_xyz"]), [])
 
 
+class TestCaptureReentrancy(unittest.TestCase):
+    def test_recording_is_reentrancy_safe(self):
+        # A class whose pickling calls a wrapped method again (like bidict, whose
+        # __reduce__/iteration hits wrapped __getitem__). Without a re-entrancy
+        # guard this recurses ~1000-deep per call and hangs capture.
+        import probe._capture_hook as h
+        for k in ("m::target",):
+            h._records.pop(k, None)
+            h._seen.pop(k, None)
+            h._full.discard(k)
+        calls = []
+        wrapped_box = {}
+
+        def target(x):
+            calls.append(1)
+            return "ok"
+
+        wrapped = h._wrap(target, "m::target")
+        wrapped_box["w"] = wrapped
+
+        class Reentrant:
+            def __reduce__(self):
+                wrapped_box["w"](self)   # pickling me re-enters the wrapped call
+                return (str, ("R",))
+
+        try:
+            self.assertEqual(wrapped(Reentrant()), "ok")   # must not hang/recurse
+            # the inner (pickle-triggered) call is suppressed: real fn runs twice
+            # (outer + inner pass-through) but recording happens at most once.
+            self.assertLessEqual(len(calls), 3)
+            self.assertLessEqual(len(h._records.get("m::target", [])), 1)
+        finally:
+            h._records.pop("m::target", None)
+            h._seen.pop("m::target", None)
+            h._full.discard("m::target")
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)
