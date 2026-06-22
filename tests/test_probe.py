@@ -424,6 +424,18 @@ class TestChangedDetection(unittest.TestCase):
         self.assertNotEqual(a["f"], b["f"])
 
 
+class TestProductionCapture(unittest.TestCase):
+    def test_capture_from_arbitrary_command(self):
+        import sys
+
+        from probe.capture import capture_command
+        # capture from a plain script run (not a test runner)
+        code = "def f(x):\n    return x\nfor i in range(3):\n    f(i)\n"
+        recs = capture_command(["__main__"], [sys.executable, "-c", code])
+        self.assertIn("__main__::f", recs)
+        self.assertEqual(len(recs["__main__::f"]), 3)
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
