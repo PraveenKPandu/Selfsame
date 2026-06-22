@@ -102,7 +102,9 @@ def main(argv=None) -> int:
 
     modules = [m for m in ns.modules.split(",") if m]
     funcs = [f for f in ns.funcs.split(",")] if ns.funcs else None
-    records = capture_command(modules, command, funcs)
+    # Run in the current directory and make it (and its src/) importable, so a
+    # flat- or src-layout package under test imports during the command.
+    records = capture_command(modules, command, funcs, cwd=os.getcwd())
 
     with open(ns.out, "wb") as f:
         pickle.dump({"records": records}, f)
