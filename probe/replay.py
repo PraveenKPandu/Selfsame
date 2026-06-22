@@ -68,6 +68,8 @@ def _unsound(obs_list) -> Optional[str]:
             return "concurrency"
         if "val" in o and _has_opaque(o["val"]):
             return "opaque-return"
+        if o.get("self_after") is not None and _has_opaque(o["self_after"]):
+            return "opaque-state"
     return None
 
 
@@ -75,8 +77,11 @@ def _same(a: Dict, b: Dict) -> bool:
     if ("exc" in a) != ("exc" in b):
         return False
     if "exc" in a:
-        return a["exc"] == b["exc"]
-    return a.get("val") == b.get("val")
+        if a["exc"] != b["exc"]:
+            return False
+    elif a.get("val") != b.get("val"):
+        return False
+    return a.get("self_after") == b.get("self_after")  # method mutation is behavior
 
 
 def _add_worktree(repo, ref) -> str:

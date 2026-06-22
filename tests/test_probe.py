@@ -335,5 +335,48 @@ class TestCaptureReplayUnits(unittest.TestCase):
         self.assertIs(_resolve(m, "Class.method"), Class.method)
 
 
+class TestHardening(unittest.TestCase):
+    def test_iterator_materialization(self):
+        from probe.canonical import canonical
+        gen = (i for i in range(3))
+        self.assertEqual(canonical(gen), ["iter", [["int", 0], ["int", 1], ["int", 2]]])
+        self.assertEqual(canonical(map(int, ["1", "2"])), ["iter", [["int", 1], ["int", 2]]])
+        self.assertEqual(canonical(range(2, 8, 2)), ["range", 2, 8, 2])
+
+    def test_iterator_truncation_is_opaque(self):
+        import itertools
+
+        from probe.canonical import canonical
+        from probe.replay import _has_opaque
+        # an unbounded iterator must be refused, not materialized forever
+        c = canonical(itertools.count())
+        self.assertTrue(_has_opaque(c))
+
+    def test_test_modules_excluded(self):
+        from probe import _capture_hook as hook
+        hook._MODULES = ("mypkg",)
+        self.assertTrue(hook._module_matches("mypkg.core"))
+        self.assertFalse(hook._module_matches("mypkg.tests.test_core"))
+        self.assertFalse(hook._module_matches("mypkg.conftest"))
+        self.assertFalse(hook._module_matches("mypkg.core_test"))
+
+    def test_method_self_state_compared(self):
+        # two observations differing only in post-call self state are not "same"
+        from probe import replay
+        a = {"val": ["none"], "io": 0, "threads": 0, "self_after": ["obj", "C", 1]}
+        b = {"val": ["none"], "io": 0, "threads": 0, "self_after": ["obj", "C", 2]}
+        self.assertFalse(replay._same(a, b))
+        self.assertTrue(replay._same(a, dict(a)))
+
+    def test_systemexit_is_observable(self):
+        from probe import harness
+
+        def bail(x: int) -> int:
+            raise SystemExit(2)
+        o = harness.observe(bail, (1,))
+        self.assertFalse(o.returned)
+        self.assertIn("SystemExit", o.exception)
+
+
 if __name__ == "__main__":
     unittest.main()

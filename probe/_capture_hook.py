@@ -24,15 +24,28 @@ _DIR = os.environ.get("PROBE_CAPTURE_DIR")
 _MODULES = tuple(m for m in os.environ.get("PROBE_CAPTURE_MODULES", "").split(",") if m)
 _FUNCS = set(f for f in os.environ.get("PROBE_CAPTURE_FUNCS", "").split(",") if f)
 _CAP_PER_FUNC = 300
+# Safety valve: stop profiling after this many call events so a heavy suite
+# (stress/integration) can't make capture run unboundedly. We keep what we have.
+_MAX_EVENTS = int(os.environ.get("PROBE_CAPTURE_MAX_EVENTS", "3000000"))
 
 _records = {}   # qualname -> list[pickled values]
 _seen = {}      # qualname -> set[hash]
 _lock = threading.Lock()
+_events = 0
+_stopped = False
+
+
+def _is_test_module(name):
+    for part in name.split("."):
+        if part in ("tests", "test", "conftest") or part.startswith("test_") \
+                or part.endswith("_test"):
+            return True
+    return False
 
 
 def _module_matches(name):
-    if not name:
-        return False
+    if not name or _is_test_module(name):
+        return False  # don't capture the test code itself, only the code under test
     for m in _MODULES:
         if name == m or name.startswith(m + "."):
             return True
@@ -56,6 +69,13 @@ def _qualname(code, values):
 def _profile(frame, event, arg):
     if event != "call":
         return
+    global _events, _stopped
+    _events += 1
+    if _events > _MAX_EVENTS:
+        if not _stopped:
+            _stopped = True
+            sys.setprofile(None)  # bound overhead on pathological suites
+        return
     code = frame.f_code
     if code.co_name.startswith("<"):
         return  # <lambda>, <genexpr>, <listcomp>, <module> — not replayable
@@ -67,6 +87,8 @@ def _profile(frame, event, arg):
     except Exception:
         return
     qn = _qualname(code, values)
+    if "<" in qn:
+        return  # methods of test-local classes (<locals>) — not replayable
     if _FUNCS and qn not in _FUNCS and code.co_name not in _FUNCS:
         return
     key = module + "::" + qn  # so replay knows which module to import

@@ -15,6 +15,7 @@ get their captured `cls` dropped.
 import base64
 import inspect
 import json
+import os
 import pickle
 import sys
 
@@ -30,7 +31,12 @@ def main() -> int:
     job = json.load(sys.stdin)
     out = {"loaded": False, "error": None, "obs": []}
     try:
-        sys.path.insert(0, job["worktree"])
+        # Support both flat (pkg/) and src (src/pkg/) layouts; insert at front so
+        # the worktree version shadows any installed copy of the package.
+        wt = job["worktree"]
+        for p in (os.path.join(wt, "src"), wt):
+            if os.path.isdir(p):
+                sys.path.insert(0, p)
         import importlib
 
         from probe import harness
@@ -43,20 +49,45 @@ def main() -> int:
             print(json.dumps(out))
             return 0
         out["loaded"] = True
+        import copy
         bound_classmethod = inspect.ismethod(fn)  # cls already bound
+        qualname = job["qualname"]
+        is_method = ("." in qualname) and not bound_classmethod
+
+        def run_once(values):
+            # Deep-copy so a mutating call doesn't taint the next run, and so we
+            # can read the receiver's post-call state. Behavior of a method =
+            # return value PLUS how it mutated self.
+            try:
+                args = copy.deepcopy(values)
+            except Exception:
+                args = values
+            call = tuple(args[1:]) if bound_classmethod else tuple(args)
+            o = harness.observe(fn, call)
+            ret = ("exc", o.exception) if o.exception is not None \
+                else ("val", canonical(o.value))
+            state = None
+            if is_method and args:
+                try:
+                    state = canonical(args[0])
+                except Exception:
+                    state = ["opaque", "self"]
+            return ret, state, o.counts.get("io", 0), o.counts.get("threads", 0)
 
         for blob in job["args_b64"]:
             values = pickle.loads(base64.b64decode(blob))
-            call_args = tuple(values[1:]) if bound_classmethod else tuple(values)
-            o1 = harness.observe(fn, call_args)
-            o2 = harness.observe(fn, call_args)  # cheap determinism guard
-            rec = {"io": o1.counts.get("io", 0), "threads": o1.counts.get("threads", 0)}
-            if not o1.same_behavior(o2):
+            r1, s1, io, th = run_once(values)
+            r2, s2, _, _ = run_once(values)  # determinism guard (fresh copy)
+            rec = {"io": io, "threads": th}
+            if r1 != r2 or s1 != s2:
                 rec["nondet"] = True
-            elif o1.exception is not None:
-                rec["exc"] = o1.exception
             else:
-                rec["val"] = canonical(o1.value)
+                if r1[0] == "exc":
+                    rec["exc"] = r1[1]
+                else:
+                    rec["val"] = r1[1]
+                if is_method:
+                    rec["self_after"] = s1
             out["obs"].append(rec)
     except Exception as e:  # import / relative-import / unpickle error
         out["error"] = "%s: %s" % (type(e).__name__, e)

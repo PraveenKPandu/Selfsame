@@ -100,5 +100,41 @@ is the viable shape of the tool: *point it at a repo that has tests, and it tell
 you which functions a refactor provably left unchanged — soundly.*
 
 Remaining limits: only functions exercised by tests get inputs (coverage tracks
-test coverage); capture is in-process via pytest today; cross-version comparison
-is state-structural (custom `__eq__` honored only in-process).
+test coverage); cross-version comparison is state-structural (custom `__eq__`
+honored only in-process).
+
+## 6. Multi-repo validation (probe.verify on real repos)
+
+Ran the one-command `probe.verify` against six real OSS repos, comparing ~30
+commits of history per repo, inputs from each repo's own test suite.
+
+| repo | profile | sound auto-verify |
+|---|---|---|
+| inflection | pure functions | 100% |
+| slugify | string processing | 100% |
+| boltons | utilities + OrderedMultiDict | 95% |
+| toolz | functional + classes | 90% |
+| sortedcontainers | heavy OO (SortedList) | 86% |
+| cachetools | caching classes | n/a — HEAD needs Python 3.10+ |
+
+**Zero false confidence on every repo.** Refusals all had honest causes (lazy
+iterators over the safety cap, pickle-internal dunders, added/removed members).
+
+Each repo surfaced real defects, all fixed:
+
+- `src/` layout couldn't be imported in replay -> src-aware path insertion.
+- Mutating methods were falsely "nondeterministic" (the determinism guard re-ran
+  on the same `self`) -> deep-copy args per run, and compare the post-call `self`
+  state so a method's mutation is part of the behavior checked.
+- Test code was captured as noise (`--modules toolz` matched `toolz.tests.*`,
+  flooding results with `TestCase` methods) -> exclude test modules; drop
+  `<lambda>`/`<genexpr>`/`<locals>`.
+- `argparse`/`sys.exit` crashed the worker (`SystemExit` not an `Exception`) ->
+  treated as observable behavior.
+- Iterator/generator returns were refused as opaque -> bounded materialization
+  (`__iter__`, `irange`, `iterkeys`, ... now verify; unbounded -> still refused).
+- A pathological (stress) suite made capture hang under the profile hook -> an
+  event-budget safety valve uninstalls profiling after enough samples (a 5M-call
+  loop drops from a long profiled run to ~1.6s).
+
+A sixth repo (boltons) found no new bugs — the engine had stabilized.
