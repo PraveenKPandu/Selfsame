@@ -173,21 +173,46 @@ def _havoc_value(v, rng, alphabet):
         return s.encode("latin-1", "ignore")
     if isinstance(v, (list, tuple)):
         lst = list(v)
-        if lst and rng.random() < 0.4:
+        # Structural operators: not just mutate/del/append one element, but also
+        # insert at an arbitrary position, duplicate a multi-element subrange,
+        # swap two elements, and reverse — reach container shapes single-element
+        # edits can't.
+        op = rng.choice(["mutate", "del", "insert", "dup_range",
+                         "swap", "reverse", "append"])
+        if lst and op == "mutate":
             j = rng.randrange(len(lst))
             lst[j] = _havoc_value(lst[j], rng, alphabet)
-        elif lst and rng.random() < 0.5:
+        elif lst and op == "del":
             del lst[rng.randrange(len(lst))]
+        elif op == "insert":
+            j = rng.randint(0, len(lst))
+            lst.insert(j, rng.choice(lst) if lst else 0)
+        elif lst and op == "dup_range":
+            i = rng.randrange(len(lst))
+            j = rng.randint(i + 1, len(lst))
+            lst[i:i] = lst[i:j]                       # duplicate a subrange
+        elif len(lst) >= 2 and op == "swap":
+            i, j = rng.randrange(len(lst)), rng.randrange(len(lst))
+            lst[i], lst[j] = lst[j], lst[i]
+        elif lst and op == "reverse":
+            lst.reverse()
         else:
             lst.append(rng.choice(lst) if lst else 0)
         return type(v)(lst)
     if isinstance(v, dict):
         d = dict(v)
-        if d:
-            k = rng.choice(list(d))
+        keys = list(d)
+        op = rng.choice(["mutate", "del", "add", "swap"])
+        if keys and op == "mutate":
+            k = rng.choice(keys)
             d[k] = _havoc_value(d[k], rng, alphabet)
+        elif keys and op == "del":
+            del d[rng.choice(keys)]
+        elif len(keys) >= 2 and op == "swap":
+            a, b = rng.sample(keys, 2)
+            d[a], d[b] = d[b], d[a]                   # swap two values
         else:
-            d["k"] = rng.randint(0, 9)
+            d["__k%d" % rng.randint(0, 9)] = rng.randint(0, 9)
         return d
     state = getattr(v, "__dict__", None)
     if state:

@@ -862,6 +862,38 @@ class TestMutation(unittest.TestCase):
             c = mutate_one(p1, rng, list("xyz"), None, None)
             self.assertFalse(c[1].count("B") >= 8)
 
+    def test_structural_list_ops(self):
+        import random
+
+        from probe._mutate import mutate_one
+        rng = random.Random(0)
+        grew_by_more_than_one = reversed_ = False
+        base = [1, 2, 3]
+        for _ in range(400):
+            out = mutate_one([list(base)], rng, list("xyz"))[0]
+            if len(out) - len(base) >= 2:          # dup_range / multi-insert
+                grew_by_more_than_one = True
+            if out == base[::-1]:                  # reverse op
+                reversed_ = True
+        self.assertTrue(grew_by_more_than_one)
+        self.assertTrue(reversed_)
+
+    def test_structural_dict_ops(self):
+        import random
+
+        from probe._mutate import mutate_one
+        rng = random.Random(0)
+        grew = shrank = False
+        base = {"a": 1, "b": 2}
+        for _ in range(400):
+            out = mutate_one([dict(base)], rng, list("xyz"))[0]
+            if len(out) > len(base):               # add key
+                grew = True
+            if len(out) < len(base):               # del key
+                shrank = True
+        self.assertTrue(grew)
+        self.assertTrue(shrank)
+
     def test_mutate_one_injects_dictionary_token(self):
         import random
 
