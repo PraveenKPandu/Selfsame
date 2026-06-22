@@ -185,7 +185,7 @@ def _check_key(base_path, head_path, key, blobs, python_exe):
 
 
 def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
-                 label: str, python_exe: str = None) -> int:
+                 label: str, python_exe: str = None, strict: bool = False) -> int:
     """Compare two already-materialized versions (directories on disk).
 
     Per-function checks run in parallel (each spawns two short-lived worker
@@ -208,8 +208,16 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     for _name, _n, verdict, _note in rows:
         tally[verdict] = tally.get(verdict, 0) + 1
 
+    # A timeout is an error subtype; track it separately so it never reads as a
+    # divergence (the two looked identical before).
+    n_timeout = sum(1 for _n, _c, v, t in rows if v == "error" and t == "timeout")
+    n_error = tally.get("error", 0) - n_timeout
+    n_skipped = tally.get("skipped", 0)
+    n_div = tally.get("divergent", 0)
+
     for name, n, verdict, note in rows:
-        print("  %-30s n=%-4d %-13s %s" % (name, n, verdict, note))
+        mark = "X" if verdict == "divergent" else ("!" if verdict == "error" else " ")
+        print("%s %-30s n=%-4d %-13s %s" % (mark, name, n, verdict, note))
 
     gen_err = sum(1 for _n, _c, v, t in rows
                   if v == "error" and "No module named" in (t or ""))
@@ -222,17 +230,41 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
 
     checked = sum(1 for _n, _c, v, _t in rows
                   if v in ("equivalent", "divergent", "unverifiable"))
-    verifiable = tally.get("equivalent", 0) + tally.get("divergent", 0)
+    verifiable = tally.get("equivalent", 0) + n_div
     print("\n" + "-" * 74)
     print("Functions with captured inputs : %d" % len(rows))
     if checked:
         print("Sound auto-verify              : %d/%d = %.0f%%"
               % (verifiable, checked, 100.0 * verifiable / checked))
-    print("  equivalent : %d   divergent : %d   unverifiable : %d   not-comparable : %d"
-          % (tally.get("equivalent", 0), tally.get("divergent", 0),
-             tally.get("unverifiable", 0),
-             tally.get("skipped", 0) + tally.get("error", 0)))
-    return 1 if tally.get("divergent", 0) else 0
+    print("  verified -> equivalent : %d   divergent : %d   unverifiable : %d"
+          % (tally.get("equivalent", 0), n_div, tally.get("unverifiable", 0)))
+    print("  not verified -> skipped : %d   error : %d   timeout : %d"
+          % (n_skipped, n_error, n_timeout))
+    if n_div:
+        print("  ** %d DIVERGENCE(S): behavior changed at a tested input **" % n_div)
+    if n_timeout:
+        print("  note: %d hit the %ds worker timeout (PROBE_WORKER_TIMEOUT) — "
+              "raise it or reduce load; a timeout is NOT a divergence."
+              % (n_timeout, _WORKER_TIMEOUT))
+
+    code = _exit_code(rows, strict)
+    if code == 3:
+        print("  strict: %d function(s) could not be verified -> failing (exit 3)."
+              % (n_error + n_timeout))
+    return code
+
+
+def _exit_code(rows, strict) -> int:
+    """Map verdict rows to a process exit code: 1 = divergence (always),
+    3 = --strict and some function was unverifiable (error/timeout), 0 = clean.
+    `skipped` (absent in a version) is intentional, not a failure."""
+    div = any(v == "divergent" for _n, _c, v, _t in rows)
+    incomplete = any(v == "error" for _n, _c, v, _t in rows)
+    if div:
+        return 1
+    if strict and incomplete:
+        return 3
+    return 0
 
 
 def replay(repo: str, base: str, head: str, capture_path: str,

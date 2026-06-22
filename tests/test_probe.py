@@ -980,6 +980,36 @@ class TestWorktreePrep(unittest.TestCase):
         self.assertEqual(replay._copy_generated_sources(".", ".", ["nope_xyz"]), [])
 
 
+class TestExitCode(unittest.TestCase):
+    def _rows(self, *verdicts):
+        # rows are (name, n, verdict, note)
+        return [("f%d" % i, 1, v, "timeout" if v == "error" else "")
+                for i, v in enumerate(verdicts)]
+
+    def test_clean_is_zero(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "equivalent", "unverifiable")
+        self.assertEqual(_exit_code(rows, strict=False), 0)
+        self.assertEqual(_exit_code(rows, strict=True), 0)
+
+    def test_divergence_is_one_even_with_strict(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "divergent", "error")
+        self.assertEqual(_exit_code(rows, strict=False), 1)
+        self.assertEqual(_exit_code(rows, strict=True), 1)  # divergence dominates
+
+    def test_incomplete_only_fails_under_strict(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "error")          # error == timeout here
+        self.assertEqual(_exit_code(rows, strict=False), 0)  # back-compat: passes
+        self.assertEqual(_exit_code(rows, strict=True), 3)   # strict: incomplete
+
+    def test_skipped_is_not_incomplete(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "skipped")
+        self.assertEqual(_exit_code(rows, strict=True), 0)   # skipped != failure
+
+
 class TestCaptureGuards(unittest.TestCase):
     def test_benchmark_disabled_for_pytest(self):
         from probe.capture import _maybe_disable_benchmark

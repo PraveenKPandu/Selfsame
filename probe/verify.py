@@ -7,13 +7,20 @@ Run from the repo root:
   python3 -m probe.verify --base <ref> --modules <pkg> -- pytest -q
   python3 -m probe.verify --base main --head HEAD --modules mypkg -- python -m unittest
 
---head defaults to WORKTREE (your current checkout). Exits non-zero if any
-divergence is caught — drop it in CI.
+--head defaults to WORKTREE (your current checkout). Exit codes: 0 = no
+divergence, 1 = at least one divergence, 2 = usage error, 3 = --strict and some
+functions could not be verified (error/timeout). Drop it in CI.
 
 Because the probe RUNS the target's code and tests, it must use a Python the
 target supports. Pass --python /path/to/pythonX.Y to run the test command and the
 replay workers under that interpreter; the repo's requires-python is checked and
 a mismatch is reported loudly instead of silently capturing nothing.
+
+Tuning env vars:
+  PROBE_WORKER_TIMEOUT   per-function replay timeout, seconds (default 45). Under
+                         heavy load functions can time out -> reported `timeout`
+                         (never a false divergence); raise this or reduce load.
+  PROBE_CAPTURE_TIMEOUT  wall-clock budget for the capture command (default 300).
 """
 
 import argparse
@@ -85,6 +92,9 @@ def main(argv=None) -> int:
                     help="interpreter to run tests + replay workers under")
     ap.add_argument("--changed-only", action="store_true",
                     help="only check functions that changed between base and head")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit non-zero (3) if any function could not be verified "
+                         "(error/timeout), not just on divergence")
     ns = ap.parse_args(raw[:split])
 
     repo = os.path.abspath(ns.repo)
@@ -131,7 +141,8 @@ def main(argv=None) -> int:
                  else _add_worktree(repo, ns.head, modules))
     try:
         label = "%s..%s" % (ns.base, ns.head)
-        return replay_paths(base_path, head_path, records, label, python_exe)
+        return replay_paths(base_path, head_path, records, label, python_exe,
+                            strict=ns.strict)
     finally:
         _rm_worktree(repo, base_path)
         if head_path != repo:
