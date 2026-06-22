@@ -16,6 +16,19 @@ target supports. Pass --python /path/to/pythonX.Y to run the test command and th
 replay workers under that interpreter; the repo's requires-python is checked and
 a mismatch is reported loudly instead of silently capturing nothing.
 
+Machine-readable output (for CI/tooling):
+  --json-out PATH   structured JSON report (summary, per-function verdicts with
+                    base/head/minimized witness, and changed-but-untested funcs)
+  --junit-xml PATH  JUnit XML (divergent -> failure, error/timeout -> error)
+
+Config: defaults may be set in [tool.selfsame] of pyproject.toml (or a
+selfsame.toml), so `selfsame verify -- pytest -q` works with no flags:
+  [tool.selfsame]
+  base = "main"
+  modules = ["mypkg"]
+  changed_only = true
+Explicit CLI flags always override the config. (Config parsing needs Python 3.11+.)
+
 Tuning env vars:
   PROBE_WORKER_TIMEOUT   per-function replay timeout, seconds (default 45). Under
                          heavy load functions can time out -> reported `timeout`
@@ -59,6 +72,32 @@ def _requires_python(repo: str):
     return None
 
 
+def _load_config(repo: str) -> dict:
+    """Read defaults from [tool.selfsame] in pyproject.toml, or a selfsame.toml.
+    Needs tomllib (Python 3.11+); silently absent on older interpreters."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        return {}
+    pp = os.path.join(repo, "pyproject.toml")
+    if os.path.isfile(pp):
+        try:
+            with open(pp, "rb") as f:
+                cfg = tomllib.load(f).get("tool", {}).get("selfsame", {})
+            if cfg:
+                return cfg
+        except Exception:
+            pass
+    st = os.path.join(repo, "selfsame.toml")
+    if os.path.isfile(st):
+        try:
+            with open(st, "rb") as f:
+                return tomllib.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 def _key_in_modules(key: str, modules) -> bool:
     """True if a 'module::qualname' key belongs to one of the target modules."""
     mod = key.split("::", 1)[0]
@@ -89,10 +128,10 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(prog="probe.verify")
     ap.add_argument("--repo", default=".")
-    ap.add_argument("--base", required=True, help="ref to compare against")
+    ap.add_argument("--base", default=None, help="ref to compare against")
     ap.add_argument("--head", default="WORKTREE",
                     help="ref to compare (default: current working tree)")
-    ap.add_argument("--modules", required=True,
+    ap.add_argument("--modules", default=None,
                     help="comma-separated module/package names to verify")
     ap.add_argument("--python", default=None,
                     help="interpreter to run tests + replay workers under")
@@ -103,9 +142,35 @@ def main(argv=None) -> int:
                          "(error/timeout), not just on divergence")
     ap.add_argument("--no-minimize", action="store_true",
                     help="don't shrink divergence witnesses to a minimal input")
+    ap.add_argument("--json-out", default=None,
+                    help="write a machine-readable JSON report to this path")
+    ap.add_argument("--junit-xml", default=None,
+                    help="write a JUnit XML report to this path (for CI)")
     ns = ap.parse_args(raw[:split])
 
     repo = os.path.abspath(ns.repo)
+
+    # Defaults from [tool.selfsame] in pyproject.toml or selfsame.toml; explicit
+    # CLI flags always win.
+    cfg = _load_config(repo)
+    if ns.base is None:
+        ns.base = cfg.get("base")
+    if ns.modules is None:
+        m = cfg.get("modules")
+        ns.modules = ",".join(m) if isinstance(m, (list, tuple)) else m
+    if ns.python is None:
+        ns.python = cfg.get("python")
+    if ns.head == "WORKTREE" and cfg.get("head"):
+        ns.head = cfg["head"]
+    ns.changed_only = ns.changed_only or bool(cfg.get("changed_only"))
+    ns.strict = ns.strict or bool(cfg.get("strict"))
+
+    missing = [n for n in ("base", "modules") if not getattr(ns, n)]
+    if missing:
+        print("missing required setting(s): %s — pass --%s or set in "
+              "[tool.selfsame]" % (", ".join(missing), "/--".join(missing)))
+        return 2
+
     modules = [m for m in ns.modules.split(",") if m]
     python_exe = ns.python or sys.executable
 
@@ -169,7 +234,9 @@ def main(argv=None) -> int:
     try:
         label = "%s..%s" % (ns.base, ns.head)
         return replay_paths(base_path, head_path, records, label, python_exe,
-                            strict=ns.strict, minimize=not ns.no_minimize)
+                            strict=ns.strict, minimize=not ns.no_minimize,
+                            json_out=ns.json_out, junit_out=ns.junit_xml,
+                            extra=uncovered)
     finally:
         _rm_worktree(repo, base_path)
         if head_path != repo:

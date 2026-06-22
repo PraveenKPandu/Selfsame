@@ -1060,6 +1060,64 @@ class TestBlindSpot(unittest.TestCase):
         self.assertEqual(uncovered, ["pkg.sub::c", "pkg::b"])  # 'other::d' excluded
 
 
+class TestMachineReports(unittest.TestCase):
+    def _rows(self):
+        return [
+            ("a", 3, "equivalent", "", {}),
+            ("b", 5, "divergent", "@ input #0",
+             {"input": "(1,)", "base": "1", "head": "2", "minimized": "(1,)"}),
+            ("c", 2, "error", "timeout", {"error": "timeout"}),
+            ("d", 1, "unverifiable", "opaque-return", {"reason": "opaque-return"}),
+        ]
+
+    def test_json_report(self):
+        import json
+        import tempfile
+
+        from probe.replay import _write_machine_reports
+        tally = {"equivalent": 1, "divergent": 1, "error": 1, "unverifiable": 1}
+        p = os.path.join(tempfile.mkdtemp(), "r.json")
+        _write_machine_reports("base..head", self._rows(), tally, 1, ["pkg::x"],
+                               p, None)
+        with open(p) as f:
+            data = json.load(f)
+        self.assertEqual(data["summary"]["divergent"], 1)
+        self.assertEqual(data["summary"]["timeout"], 1)
+        self.assertEqual(data["summary"]["error"], 0)   # 1 error - 1 timeout
+        b = [r for r in data["results"] if r["function"] == "b"][0]
+        self.assertEqual(b["head"], "2")
+        self.assertEqual(data["unverified_changed"], ["pkg::x"])
+
+    def test_junit_report_is_well_formed(self):
+        import tempfile
+        from xml.dom import minidom
+
+        from probe.replay import _write_junit
+        p = os.path.join(tempfile.mkdtemp(), "r.xml")
+        _write_junit("base..head", self._rows(), p)
+        dom = minidom.parse(p)   # raises if malformed
+        suite = dom.getElementsByTagName("testsuite")[0]
+        self.assertEqual(suite.getAttribute("tests"), "4")
+        self.assertEqual(suite.getAttribute("failures"), "1")
+        self.assertEqual(len(dom.getElementsByTagName("testcase")), 4)
+
+    def test_load_config(self):
+        import tempfile
+
+        from probe.verify import _load_config
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+            f.write('[tool.selfsame]\nbase = "main"\n'
+                    'modules = ["pkg", "pkg2"]\nstrict = true\n')
+        cfg = _load_config(d)
+        if sys.version_info >= (3, 11):   # tomllib available
+            self.assertEqual(cfg.get("base"), "main")
+            self.assertEqual(cfg.get("modules"), ["pkg", "pkg2"])
+            self.assertTrue(cfg.get("strict"))
+        else:
+            self.assertEqual(cfg, {})     # gracefully absent pre-3.11
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)

@@ -235,7 +235,7 @@ def _check_key(base_path, head_path, key, blobs, python_exe, minimize=True):
     blobs = blobs[:_REPLAY_MAX_ARGS]
     b = _worker(base_path, module_name, qualname, blobs, python_exe)
     h = _worker(head_path, module_name, qualname, blobs, python_exe)
-    verdict, note, idx = _verdict(b, h, blobs)
+    verdict, note, idx, detail = _verdict(b, h, blobs)
     if verdict == "divergent" and minimize and idx is not None:
         orig = _decode_blob(blobs[idx])
         if orig is not None:
@@ -247,12 +247,68 @@ def _check_key(base_path, head_path, key, blobs, python_exe, minimize=True):
                 smaller = False
             if smaller:
                 note += "\n      minimized: %s" % _short(mini)
-    return (qualname, len(blobs), verdict, note)
+                detail["minimized"] = _short(mini)
+    return (qualname, len(blobs), verdict, note, detail)
+
+
+def _write_machine_reports(label, rows, tally, n_timeout, uncovered,
+                           json_out, junit_out):
+    summary = {
+        "equivalent": tally.get("equivalent", 0),
+        "divergent": tally.get("divergent", 0),
+        "unverifiable": tally.get("unverifiable", 0),
+        "error": tally.get("error", 0) - n_timeout,
+        "timeout": n_timeout,
+        "skipped": tally.get("skipped", 0),
+    }
+    results = [dict(function=r[0], inputs=r[1], verdict=r[2], **r[4]) for r in rows]
+    if json_out:
+        payload = {"label": label, "summary": summary, "results": results,
+                   "unverified_changed": list(uncovered)}
+        try:
+            with open(json_out, "w") as f:
+                json.dump(payload, f, indent=2)
+        except OSError:
+            pass
+    if junit_out:
+        _write_junit(label, rows, junit_out)
+
+
+def _xml_escape(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _write_junit(label, rows, path):
+    n_fail = sum(1 for r in rows if r[2] == "divergent")
+    n_err = sum(1 for r in rows if r[2] == "error")
+    n_skip = sum(1 for r in rows if r[2] in ("skipped", "unverifiable"))
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             '<testsuite name="selfsame %s" tests="%d" failures="%d" errors="%d" '
+             'skipped="%d">' % (_xml_escape(label), len(rows), n_fail, n_err, n_skip)]
+    for r in rows:
+        name, verdict, note = r[0], r[2], r[3]
+        lines.append('  <testcase name="%s">' % _xml_escape(name))
+        if verdict == "divergent":
+            lines.append('    <failure message="behavior changed">%s</failure>'
+                         % _xml_escape(note))
+        elif verdict == "error":
+            lines.append('    <error message="%s"/>' % _xml_escape(note))
+        elif verdict in ("skipped", "unverifiable"):
+            lines.append('    <skipped message="%s"/>' % _xml_escape(note))
+        lines.append('  </testcase>')
+    lines.append('</testsuite>')
+    try:
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
 
 
 def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
                  label: str, python_exe: str = None, strict: bool = False,
-                 minimize: bool = True) -> int:
+                 minimize: bool = True, json_out: str = None,
+                 junit_out: str = None, extra=None) -> int:
     """Compare two already-materialized versions (directories on disk).
 
     Per-function checks run in parallel (each spawns two short-lived worker
@@ -273,22 +329,26 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     rows.sort(key=lambda r: r[0])
 
     tally: Dict[str, int] = {}
-    for _name, _n, verdict, _note in rows:
-        tally[verdict] = tally.get(verdict, 0) + 1
+    for r in rows:
+        tally[r[2]] = tally.get(r[2], 0) + 1
 
     # A timeout is an error subtype; track it separately so it never reads as a
     # divergence (the two looked identical before).
-    n_timeout = sum(1 for _n, _c, v, t in rows if v == "error" and t == "timeout")
+    n_timeout = sum(1 for r in rows if r[2] == "error" and r[3] == "timeout")
     n_error = tally.get("error", 0) - n_timeout
     n_skipped = tally.get("skipped", 0)
     n_div = tally.get("divergent", 0)
 
-    for name, n, verdict, note in rows:
+    if json_out or junit_out:
+        _write_machine_reports(label, rows, tally, n_timeout, extra or [],
+                               json_out, junit_out)
+
+    for name, n, verdict, note in (r[:4] for r in rows):
         mark = "X" if verdict == "divergent" else ("!" if verdict == "error" else " ")
         print("%s %-30s n=%-4d %-13s %s" % (mark, name, n, verdict, note))
 
-    gen_err = sum(1 for _n, _c, v, t in rows
-                  if v == "error" and "No module named" in (t or ""))
+    gen_err = sum(1 for r in rows
+                  if r[2] == "error" and "No module named" in (r[3] or ""))
     if gen_err:
         print("\nNote: %d function(s) errored with a missing module. A version "
               "ref's worktree may lack a build-generated file that isn't in git "
@@ -296,8 +356,8 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
               "git-ignored files under the package dir; if this persists, "
               "generate/build it in your working tree first." % gen_err)
 
-    checked = sum(1 for _n, _c, v, _t in rows
-                  if v in ("equivalent", "divergent", "unverifiable"))
+    checked = sum(1 for r in rows
+                  if r[2] in ("equivalent", "divergent", "unverifiable"))
     verifiable = tally.get("equivalent", 0) + n_div
     print("\n" + "-" * 74)
     print("Functions with captured inputs : %d" % len(rows))
@@ -326,8 +386,8 @@ def _exit_code(rows, strict) -> int:
     """Map verdict rows to a process exit code: 1 = divergence (always),
     3 = --strict and some function was unverifiable (error/timeout), 0 = clean.
     `skipped` (absent in a version) is intentional, not a failure."""
-    div = any(v == "divergent" for _n, _c, v, _t in rows)
-    incomplete = any(v == "error" for _n, _c, v, _t in rows)
+    div = any(r[2] == "divergent" for r in rows)
+    incomplete = any(r[2] == "error" for r in rows)
     if div:
         return 1
     if strict and incomplete:
@@ -425,29 +485,35 @@ def _short(values, limit=120):
 
 
 def _verdict(b: Dict, h: Dict, blobs):
-    """Return (verdict, note, div_idx). div_idx is the diverging input index for
-    a 'divergent' verdict (so the caller can minimize the witness), else None."""
+    """Return (verdict, note, div_idx, detail). div_idx is the diverging input
+    index for 'divergent' (so the caller can minimize), else None. detail is a
+    structured dict for machine-readable output."""
     if b.get("error") or h.get("error"):
-        return "error", (b.get("error") or h.get("error")), None
+        msg = b.get("error") or h.get("error")
+        return "error", msg, None, {"error": msg}
     if not b.get("loaded") or not h.get("loaded"):
-        return "skipped", "not present in both versions", None
+        return "skipped", "not present in both versions", None, {}
     flag = _unsound(b["obs"]) or _unsound(h["obs"])
     if flag:
-        return "unverifiable", flag, None
+        return "unverifiable", flag, None, {"reason": flag}
     if len(b["obs"]) != len(h["obs"]):
-        return "error", "observation count mismatch", None
+        return "error", "observation count mismatch", None, \
+            {"error": "observation count mismatch"}
     for i, (ob, oh) in enumerate(zip(b["obs"], h["obs"])):
         if not _same(ob, oh):
             arg = _decode_blob(blobs[i])
+            inp, base_s, head_s = _short(arg), _render_obs(ob), _render_obs(oh)
             note = ("@ input #%d\n      input : %s\n      base  : %s"
-                    "\n      head  : %s" % (i, _short(arg), _render_obs(ob),
-                                            _render_obs(oh)))
+                    "\n      head  : %s" % (i, inp, base_s, head_s))
+            detail = {"input_index": i, "input": inp, "base": base_s,
+                      "head": head_s}
             # method that returns the same value but mutates self differently
             if ob.get("val") == oh.get("val") and ob.get("exc") == oh.get("exc") \
                     and ob.get("self_after") != oh.get("self_after"):
                 note += "\n      (receiver state differs after the call)"
-            return "divergent", note, i
-    return "equivalent", "", None
+                detail["receiver_state_differs"] = True
+            return "divergent", note, i, detail
+    return "equivalent", "", None, {}
 
 
 def main(argv=None) -> int:
