@@ -192,3 +192,54 @@ wrapping, 0 not-comparable); inflection stays 100% with all divergences caught.
 Capture isn't limited to imported modules' code — functions defined in the
 entry-point script (`__main__`) aren't wrapped, but real code under test lives in
 imported modules.
+
+## 9. Public-interface snapshots for stateful classes
+
+Previously `canonical(obj)` for a general object compared its private
+`__dict__`/`__slots__`, or refused (`opaque`). Two problems: (a) comparing
+private internals is **representation-sensitive** — a refactor that swaps the
+internal layout (e.g. linked-list -> OrderedDict) while preserving observable
+behavior would FALSE-POSITIVE as `divergent`; (b) objects with opaque internals
+gave low coverage.
+
+Change (`probe/canonical.py`, mirrored in `probe/equality.py`): before the
+private-state fallback, snapshot an object by its OBSERVABLE public interface
+when a **side-effect-free** one exists:
+
+- `collections.abc.Sequence` (not str/bytes — handled earlier): snapshot ordered
+  contents via iteration. For these, `__iter__` is the contract for "the
+  contents," and the contents ARE the behavior — representation-independent.
+- `collections.abc.Set`: snapshot order-normalized contents.
+- Public (non-`_`-prefixed) attributes are read from the object's own
+  `__dict__`/`__slots__` storage (never descriptors/properties, which could
+  compute or mutate) and included in the snapshot.
+
+Soundness — why no false positives and no missed catches:
+
+- **No false positives across a refactor.** Same public class + same observable
+  contents + same public attrs -> identical snapshot, even if `__dict__` differs.
+  This is exactly the representation-change case that the private path got wrong.
+  (Test: `test_internal_repr_change_canonicalizes_equal`.)
+- **No missed catches.** The snapshot keys on the class qualname AND the full
+  contents AND public attrs, so different contents, a different container kind,
+  or a changed public attribute all canonicalize NOT-equal. (Tests:
+  `test_different_observable_contents_not_equal`,
+  `test_public_attributes_included_in_snapshot`.) In replay, base/head are the
+  same class, so the qualname key never masks a real change.
+- **Mappings are excluded.** Materializing a mapping's items calls
+  `__getitem__`, which MUTATES LRU-style caches — a side effect that would
+  corrupt the snapshot and break determinism. Mappings fall back to private-state
+  comparison (or refuse). Verified the read path never touches `__getitem__`
+  (`test_mapping_not_read_via_getitem`).
+- **No regression.** When no safe public interface exists, the existing private
+  `__dict__`/`__slots__` path runs unchanged (so SortedList-style private
+  comparisons still work), and a truly opaque object (no public view, no state)
+  still refuses (`test_opaque_with_no_observable_still_refuses`,
+  `test_private_only_object_still_uses_private_state`). A broken
+  `__iter__`/`__getitem__` is caught and falls back rather than guessing.
+
+Limitations: the Set path in `equality.py` compares contents as a `frozenset`,
+so set members without a real `__eq__` degrade to identity comparison — this can
+only produce a conservative NOT-equal, never a false positive. The benefit is
+scoped to Sequence/Set; arbitrary domain objects whose observable interface is
+methods (not iteration) still fall back to private state or refuse.
