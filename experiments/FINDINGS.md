@@ -1,8 +1,19 @@
 # Coverage Probe — go/no-go findings
 
+> **Read this first — these notes are a chronological journey, not a status page.**
+> Sections **§1–4 document an approach we ABANDONED**: generating inputs from type
+> hints, which scored **~0% on real repos** because real Python is mostly untyped
+> at refactor time. That 0% is *why we pivoted*. The **shipped product starts at
+> §5: capture-replay** — record real arguments from your existing test run instead
+> of generating them. On the *same* repos that scored 0%, capture-replay scores
+> **86–100% sound auto-verify and catches real regressions, with zero false
+> confidence** (§5–6, and the snapshot/drift + agent-report work in §17–22). So:
+> §2's "0%" = the dead end; the current numbers are 86–100%.
+
 The question: is deterministic behavior-equivalence checking worth building as a
 real tool? We made the engine sound, then measured it on constructed and real
-corpora.
+corpora — and the answer changed once we stopped *generating* inputs and started
+*capturing* them.
 
 ## 1. Soundness is achievable, but trades hard against coverage
 
@@ -18,7 +29,10 @@ wrong." We reached 0% false confidence by refusing uncontrolled I/O, refusing an
 thread use, and mining code literals for inputs. The price: it refuses ~half of
 even a favorable corpus.
 
-## 2. On REAL repos and REAL commits, current coverage is ~0%
+## 2. The GENERATION approach scored ~0% on real repos (the dead end → why we pivoted)
+
+> ⚠️ This is the **abandoned** typed-input-generation approach, not the shipped
+> tool. See §5 for what capture-replay does on these same repos (0% → 100%).
 
 `real_repo.py` walks a file's git history and checks every top-level function
 whose body actually changed.
