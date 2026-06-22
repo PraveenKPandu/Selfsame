@@ -599,3 +599,38 @@ for single-version generate→regenerate loops), N-way differential of multiple 
 generations, and a pytest plugin for auto-run. The honest boundary: a deterministic
 tool verifies behavior *change/agreement*, not *correctness* (correctness needs an
 independent spec/oracle); its value compounds from the second iteration onward.
+
+## 21. Snapshot/drift: regression vs a confirmed baseline (the AI-dev use case)
+
+The real need in generative-AI development: a user accepts a build, then an agent
+keeps generating features, and the danger is silent behavioral regression — "a new
+feature, but the existing functionality is gone." There are no two git branches to
+diff; there's an *accepted version* and *what the AI did next*.
+
+`snapshot` freezes the accepted build's behavior; `drift` measures how far the
+current code deviated — no branch needed:
+
+    selfsame snapshot --modules app -- pytest -q     # freeze accepted behavior
+    # ... AI develops the next feature ...
+    selfsame drift                                    # exit 1 if anything drifted
+
+- `snapshot` captures inputs and records the current code's canonical observations
+  (return / exception / receiver-state + io/threads/nondeterminism flags + params)
+  to `.selfsame/snapshot.json` (with the git rev of the accepted build).
+- `drift` replays the SAME stored inputs on the working tree and compares to the
+  frozen behavior through the existing sound `_verdict`. Verdicts are identical to
+  verify (equivalent / divergent / interface-change / unverifiable), it writes the
+  agent report, and exits 1 on any divergence.
+
+This reuses the whole engine — the "base" observations come from a file instead of
+a base worktree (`_emit_results` is now shared by replay_paths and drift). Demo:
+a regression in an existing function is caught (greet 'Hello'->'Hi', divergent), a
+behavior-preserving refactor stays equivalent, an added *optional* parameter stays
+equivalent (back-compatible — only an arity-breaking change is interface-change),
+and a brand-new function is ignored (no baseline to deviate from).
+
+Honest boundaries (unchanged): it measures deviation, not correctness; coverage ==
+the inputs the accepted build's tests exercised (a change on an untested path won't
+register — the blind-spot report names those). Value compounds as the baseline's
+test coverage grows. Still deferred: N-way differential of multiple generations,
+pytest-plugin auto-run.
