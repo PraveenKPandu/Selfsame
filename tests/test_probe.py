@@ -4,7 +4,9 @@ Run: python3 -m unittest discover -s tests
 """
 
 import datetime
+import os
 import secrets
+import sys
 import time
 import unittest
 import uuid
@@ -923,6 +925,130 @@ class TestBucketing(unittest.TestCase):
         from probe._cgfuzz_worker import _bucket
         edge = (10, 11)
         self.assertNotEqual((edge, _bucket(2)), (edge, _bucket(5)))
+
+
+class TestWorktreePrep(unittest.TestCase):
+    def _git(self, repo, *args):
+        import subprocess
+        subprocess.check_call(["git", "-C", repo] + list(args),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_copies_gitignored_generated_module_into_worktree(self):
+        import subprocess
+        import tempfile
+
+        from probe import replay
+        repo = tempfile.mkdtemp(prefix="probe_test_repo_")
+        try:
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "t@t.t")
+            self._git(repo, "config", "user.name", "t")
+            os.makedirs(os.path.join(repo, "foo"))
+            # package imports a build-generated module...
+            with open(os.path.join(repo, "foo", "__init__.py"), "w") as f:
+                f.write("from foo._version import __version__\n")
+            # ...which is git-ignored (setuptools-scm/hatch-vcs style)
+            with open(os.path.join(repo, ".gitignore"), "w") as f:
+                f.write("foo/_version.py\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "commit", "-m", "base")
+            # generated AFTER commit, not tracked
+            with open(os.path.join(repo, "foo", "_version.py"), "w") as f:
+                f.write("__version__ = '1.2.3'\n")
+
+            # a plain worktree lacks the generated file; prep must copy it in
+            wt = replay._add_worktree(repo, "HEAD", modules=["foo"])
+            try:
+                gen = os.path.join(wt, "foo", "_version.py")
+                self.assertTrue(os.path.isfile(gen),
+                                "generated _version.py not copied into worktree")
+                # and the package now imports there
+                out = subprocess.check_output(
+                    [sys.executable, "-c",
+                     "import foo;print(foo.__version__)"],
+                    cwd=wt, text=True).strip()
+                self.assertEqual(out, "1.2.3")
+            finally:
+                replay._rm_worktree(repo, wt)
+        finally:
+            import shutil
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_no_modules_means_no_copy(self):
+        from probe import replay
+        # _pkg_dirs returns nothing for unknown modules -> safe no-op
+        self.assertEqual(replay._copy_generated_sources(".", ".", ["nope_xyz"]), [])
+
+
+class TestExitCode(unittest.TestCase):
+    def _rows(self, *verdicts):
+        # rows are (name, n, verdict, note)
+        return [("f%d" % i, 1, v, "timeout" if v == "error" else "")
+                for i, v in enumerate(verdicts)]
+
+    def test_clean_is_zero(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "equivalent", "unverifiable")
+        self.assertEqual(_exit_code(rows, strict=False), 0)
+        self.assertEqual(_exit_code(rows, strict=True), 0)
+
+    def test_divergence_is_one_even_with_strict(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "divergent", "error")
+        self.assertEqual(_exit_code(rows, strict=False), 1)
+        self.assertEqual(_exit_code(rows, strict=True), 1)  # divergence dominates
+
+    def test_incomplete_only_fails_under_strict(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "error")          # error == timeout here
+        self.assertEqual(_exit_code(rows, strict=False), 0)  # back-compat: passes
+        self.assertEqual(_exit_code(rows, strict=True), 3)   # strict: incomplete
+
+    def test_skipped_is_not_incomplete(self):
+        from probe.replay import _exit_code
+        rows = self._rows("equivalent", "skipped")
+        self.assertEqual(_exit_code(rows, strict=True), 0)   # skipped != failure
+
+
+class TestCaptureGuards(unittest.TestCase):
+    def test_benchmark_disabled_for_pytest(self):
+        from probe.capture import _maybe_disable_benchmark
+        for cmd in (["python", "-m", "pytest", "-q"], ["pytest"], ["pytest3", "-x"]):
+            out, skipped = _maybe_disable_benchmark(cmd)
+            self.assertTrue(skipped, cmd)
+            self.assertIn("no:benchmark", " ".join(out))
+
+    def test_benchmark_untouched_for_non_pytest(self):
+        from probe.capture import _maybe_disable_benchmark
+        out, skipped = _maybe_disable_benchmark(["python", "-m", "unittest"])
+        self.assertFalse(skipped)
+        self.assertNotIn("no:benchmark", " ".join(out))
+
+    def test_benchmark_idempotent_and_optout(self):
+        from probe.capture import _maybe_disable_benchmark
+        _, s = _maybe_disable_benchmark(["pytest", "-p", "no:benchmark"])
+        self.assertFalse(s)
+        os.environ["PROBE_KEEP_BENCHMARK"] = "1"
+        try:
+            _, s2 = _maybe_disable_benchmark(["pytest"])
+            self.assertFalse(s2)
+        finally:
+            del os.environ["PROBE_KEEP_BENCHMARK"]
+
+    def test_capture_budget_stops_runaway(self):
+        from probe import capture
+        old = capture._CAPTURE_TIMEOUT
+        capture._CAPTURE_TIMEOUT = 2
+        try:
+            t0 = time.monotonic()
+            rec = capture.capture_command(
+                ["nomod_xyz"],
+                [sys.executable, "-c", "import time; time.sleep(60)"])
+            dt = time.monotonic() - t0
+            self.assertLess(dt, 30, "budget did not stop a 60s runaway")
+            self.assertEqual(rec, {})
+        finally:
+            capture._CAPTURE_TIMEOUT = old
 
 
 class TestCLI(unittest.TestCase):

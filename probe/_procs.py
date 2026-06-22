@@ -60,10 +60,40 @@ def install():
                 pass  # platform without these signals
 
 
+def _kill_tree(p, term_grace=None):
+    """Kill a child's process group. If term_grace is set, send SIGTERM first and
+    give the subtree that many seconds to exit cleanly (so e.g. the capture hook
+    can flush) before SIGKILL."""
+    try:
+        pgid = os.getpgid(p.pid)
+    except (ProcessLookupError, OSError):
+        pgid = None
+    if term_grace and pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+            p.wait(timeout=term_grace)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        except (ProcessLookupError, OSError):
+            return
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            p.kill()
+    except (ProcessLookupError, OSError):
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
 def run(cmd, env=None, cwd=None, input=None, capture_output=False,
-        text=False, timeout=None):
+        text=False, timeout=None, term_grace=None):
     """A subprocess.run-alike that tracks the child (own session) and kills its
-    subtree on timeout or orchestrator termination."""
+    subtree on timeout or orchestrator termination. On timeout, term_grace (if
+    set) requests a graceful SIGTERM-then-SIGKILL so the child can flush."""
     install()
     stdout = subprocess.PIPE if capture_output else None
     stderr = subprocess.PIPE if capture_output else None
@@ -77,10 +107,7 @@ def run(cmd, env=None, cwd=None, input=None, capture_output=False,
     try:
         out, err = p.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            p.kill()
+        _kill_tree(p, term_grace)
         p.communicate()
         raise
     finally:
