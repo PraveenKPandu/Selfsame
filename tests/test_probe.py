@@ -792,6 +792,33 @@ class TestMutation(unittest.TestCase):
             diffs = sum(1 for a, b in zip(m, (3, "hi")) if a != b)
             self.assertEqual(diffs, 1)
 
+    def test_havoc_introduces_novel_chars(self):
+        import random
+
+        from probe._mutate import alphabet_from, mutate_one
+        # havoc (byte-level) mutation can introduce characters absent from the
+        # seed — the thing the fixed one-shot set cannot do.
+        alpha = alphabet_from([["abc"]])
+        rng = random.Random(0)
+        produced = set()
+        for _ in range(300):
+            produced.update(mutate_one(["abc"], rng, alpha)[0])
+        self.assertTrue(produced - set("abc"))
+
+    def test_mutate_one_keeps_arity(self):
+        import random
+
+        from probe._mutate import mutate_one
+        m = mutate_one([3, "hi"], random.Random(0), list("xyz"))
+        self.assertEqual(len(m), 2)
+
+    def test_alphabet_includes_seed_and_base(self):
+        from probe._mutate import alphabet_from
+        a = alphabet_from([["q!"]])
+        self.assertIn("q", a)   # from seed
+        self.assertIn("!", a)   # from seed
+        self.assertIn("a", a)   # from base alphabet
+
 
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):

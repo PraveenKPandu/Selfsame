@@ -376,3 +376,39 @@ Takeaway: this is the piece that makes Selfsame meaningfully better than
 re-running the test suite — but only when a behavior change **hides at an
 untested edge**. It's a prototype (`probe fuzz`): mutation is a fixed
 type-aware set, not coverage-guided; that's the next step if pursued.
+
+## 14. Coverage-guided fuzzing + havoc mutation (next step)
+
+The §13 prototype used a fixed one-shot mutation set — it can't introduce novel
+bytes or drill nested branches. This adds AFL-style feedback:
+
+- **Havoc mutation** (`probe/_mutate.py`): byte/char-level insert/delete/replace
+  (alphabet drawn from seeds + printable), so the fuzzer can produce characters
+  no seed contains. Seeded `random.Random` -> reproducible.
+- **Coverage-guided loop** (`probe/_cgfuzz_worker.py`): trace line coverage of the
+  target module via `sys.settrace`; keep a mutated input in the corpus if it hits
+  a NEW line, then mutate *those* further. Drills through nested branches.
+- `probe fuzz` is coverage-guided by default (`--oneshot` for the old mode).
+
+Branchy proof — a bug at the *deep* path `s.startswith("k") and len(s) > 5`, with
+seeds that never start with "k":
+
+| | one-shot | coverage-guided |
+|---|---|---|
+| classify | **0 found** (can't introduce "k") | **divergence @ `('kbckbc',)`** (coverage 3 -> 6 lines) |
+
+But on **data-driven** code (inflection's regex/word-table rules), pure line
+coverage is the wrong signal: different inputs produce different *outputs* while
+the same *lines* run, so coverage-guidance discarded them and found 0 (one-shot,
+which keeps all mutations, found 13). Fix: **guide on output diversity too** —
+keep an input if it hits a new line OR yields a new head output. With that:
+
+| code style | guided result |
+|---|---|
+| cgdemo (branchy) | still finds the nested bug (FUZZ-ONLY) |
+| inflection (data-driven) | 80 interesting inputs kept; 3 beyond-test divergences (was 0) |
+
+Takeaway: coverage *and* output-diversity together make the guided fuzzer robust
+across branchy and data-driven code, still sound (FUZZ-ONLY = real, io/threads/
+nondeterministic/opaque inputs skipped). Next refinements if pursued: branch-edge
+(not line) coverage, energy assignment / corpus scheduling, and dictionary tokens.
