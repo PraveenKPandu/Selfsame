@@ -378,6 +378,31 @@ class TestHardening(unittest.TestCase):
         self.assertIn("SystemExit", o.exception)
 
 
+class TestCallableRepresentation(unittest.TestCase):
+    def test_canonical_callables_and_classes(self):
+        from probe.canonical import canonical
+
+        def f(x):
+            return x
+        # same function -> equal; different -> not; functions inside state too
+        self.assertEqual(canonical(f), canonical(f))
+        self.assertNotEqual(canonical(f), canonical(len))
+        self.assertEqual(canonical({"cb": f}), canonical({"cb": f}))
+        self.assertEqual(canonical(dict), canonical(dict))
+        self.assertNotEqual(canonical(dict), canonical(list))
+        # a stored function no longer makes a container opaque
+        from probe.replay import _has_opaque
+        self.assertFalse(_has_opaque(canonical({"handler": f, "n": 1})))
+
+    def test_equality_compares_callables_by_identity(self):
+        from probe.equality import equal
+
+        def g(x):
+            return x
+        self.assertTrue(equal({"cb": g}, {"cb": g}))
+        self.assertFalse(equal({"cb": g}, {"cb": len}))
+
+
 class TestVersionSupport(unittest.TestCase):
     def test_requires_python_from_pyproject(self):
         import os

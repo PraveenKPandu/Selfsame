@@ -20,9 +20,19 @@ than guessing.
 from __future__ import annotations
 
 import math
+import types
 from typing import Any
 
 _MAX_DEPTH = 60
+
+_CALLABLE_TYPES = (types.FunctionType, types.BuiltinFunctionType,
+                   types.MethodType, types.MethodWrapperType,
+                   types.BuiltinMethodType)
+
+
+def _callable_id(v: Any):
+    return (getattr(v, "__module__", "?"),
+            getattr(v, "__qualname__", getattr(v, "__name__", "?")))
 
 
 def _slots_state(obj: Any):
@@ -78,6 +88,9 @@ def equal(a: Any, b: Any, _depth: int = 0) -> bool:
             return a == b
         except Exception:
             return False
+
+    if isinstance(a, _CALLABLE_TYPES) or isinstance(a, type):
+        return _callable_id(a) == _callable_id(b)
 
     # Custom __eq__ (anything that overrides object.__eq__): trust it.
     if ta.__eq__ is not object.__eq__:
