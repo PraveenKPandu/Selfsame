@@ -73,6 +73,25 @@ def _has_varargs(sig):
     return False
 
 
+def _store(key, blob):
+    """Dedup + cap a single pickled values blob under `key`. Shared by the
+    import-hook path and the scoped-profile (__main__) path so both produce the
+    identical on-disk format."""
+    with _lock:
+        bucket = _records.setdefault(key, [])
+        if len(bucket) >= _CAP_PER_FUNC:
+            _full.add(key)
+            return
+        h = hash(blob)
+        seen = _seen.setdefault(key, set())
+        if h in seen:
+            return
+        seen.add(h)
+        bucket.append(blob)
+        if len(bucket) >= _CAP_PER_FUNC:
+            _full.add(key)
+
+
 def _record(key, sig, args, kwargs):
     # Bind to a positional values list (defaults applied) so replay can call
     # fn(*values); this keeps the capture format identical to before. Functions
@@ -87,19 +106,7 @@ def _record(key, sig, args, kwargs):
         blob = pickle.dumps(values)
     except Exception:
         return
-    with _lock:
-        bucket = _records.setdefault(key, [])
-        if len(bucket) >= _CAP_PER_FUNC:
-            _full.add(key)
-            return
-        h = hash(blob)
-        seen = _seen.setdefault(key, set())
-        if h in seen:
-            return
-        seen.add(h)
-        bucket.append(blob)
-        if len(bucket) >= _CAP_PER_FUNC:
-            _full.add(key)
+    _store(key, blob)
 
 
 def _wrap(fn, key):
@@ -210,6 +217,162 @@ class _Finder(importlib.abc.MetaPathFinder):
 
 
 # --------------------------------------------------------------------------- #
+# Scoped profile for the entry-point script (`__main__`)
+# --------------------------------------------------------------------------- #
+# The import hook can only wrap modules that are IMPORTED. The script run
+# directly (e.g. `python myscript.py`) executes as module `__main__`, so its
+# top-level functions are never wrapped. When a target module names the entry
+# script's module (normally `__main__`), we install a `sys.setprofile` callback
+# that records ONLY calls whose defining module matches a target. This is
+# deliberately scoped:
+#   * it is enabled ONLY when `__main__` (or another target) is the running
+#     entry module — never on a generic test-runner invocation, where the import
+#     hook already covers imported targets and a global profile would be costly;
+#   * the callback filters on `frame.f_globals['__name__']` before doing any
+#     work, so calls into pytest/stdlib/etc. cost just one dict lookup + a
+#     membership test and are dropped immediately.
+
+_profile_installed = False
+# code-object -> __qualname__ map for the entry module(s). Built lazily so we get
+# exact qualnames (incl. Class.method) even on Pythons without code.co_qualname.
+_qualname_cache = {}
+
+
+def _index_qualnames(module):
+    """Map every plain-function code object defined in `module` to its qualname
+    (top-level functions, static/class methods, and methods up to a small depth).
+    Exact and stdlib-only — the source of truth for the profile path's keys."""
+    out = {}
+    func_t = type(_wrap)
+
+    def add(fn):
+        if isinstance(fn, func_t) and getattr(fn, "__module__", None) == module.__name__:
+            code = getattr(fn, "__code__", None)
+            if code is not None:
+                out[code] = fn.__qualname__
+
+    def walk_class(cls, depth=0):
+        if depth > 5:
+            return
+        for raw in list(vars(cls).values()):
+            if isinstance(raw, (staticmethod, classmethod)):
+                add(raw.__func__)
+            elif isinstance(raw, func_t):
+                add(raw)
+            elif isinstance(raw, type) and getattr(raw, "__module__", None) == module.__name__:
+                walk_class(raw, depth + 1)
+
+    for obj in list(vars(module).values()):
+        if isinstance(obj, func_t):
+            add(obj)
+        elif isinstance(obj, type) and getattr(obj, "__module__", None) == module.__name__:
+            walk_class(obj)
+    return out
+
+
+def _qualname_for(code, modname):
+    """Resolve `code` -> qualname using the entry module's namespace. Returns the
+    bare function name only as a last resort (top-level funcs are unambiguous)."""
+    if hasattr(code, "co_qualname"):  # Python 3.11+: authoritative
+        return code.co_qualname
+    qn = _qualname_cache.get(code)
+    if qn is not None:
+        return qn
+    mod = sys.modules.get(modname)
+    if mod is not None:
+        try:
+            fresh = _index_qualnames(mod)
+        except Exception:
+            fresh = {}
+        _qualname_cache.update(fresh)
+        qn = _qualname_cache.get(code)
+        if qn is not None:
+            return qn
+    return code.co_name  # top-level function defined before namespace settled
+
+
+def _frame_values(frame):
+    """Reconstruct the positional values list for a call frame, matching the
+    format `_record` produces (positional+keyword params in declaration order
+    with defaults already applied; *args contents appended; **kwargs dropped)."""
+    code = frame.f_code
+    nargs = code.co_argcount
+    nkw = code.co_kwonlyargcount
+    flags = code.co_flags
+    has_varargs = bool(flags & inspect.CO_VARARGS)
+    has_varkw = bool(flags & inspect.CO_VARKEYWORDS)
+    loc = frame.f_locals
+    names = code.co_varnames
+
+    if not has_varargs and not has_varkw:
+        # Plain function: positional-or-keyword params then keyword-only params,
+        # in declaration order — exactly bind()+apply_defaults() ordering.
+        return [loc[n] for n in names[:nargs + nkw]]
+
+    # Varargs fallback mirrors _record: keep only the positionally-passed values
+    # (the fixed positional params plus whatever *args absorbed), drop kw-only
+    # and **kwargs. This keeps replay's fn(*values) call shape valid.
+    values = [loc[n] for n in names[:nargs]]
+    if has_varargs:
+        star = loc.get(names[nargs + nkw])
+        if isinstance(star, tuple):
+            values.extend(star)
+    return values
+
+
+def _profiler(frame, event, arg):
+    # Fire only on Python-level call entry; everything else is ignored cheaply.
+    if event != "call":
+        return
+    try:
+        g = frame.f_globals
+        modname = g.get("__name__")
+        if not _module_matches(modname):
+            return
+        code = frame.f_code
+        # Only real functions (fast-locals). Class and module bodies also raise
+        # "call" events but lack CO_OPTIMIZED — skip them, mirroring the
+        # import-hook which wraps functions only, never class objects.
+        if not (code.co_flags & inspect.CO_OPTIMIZED):
+            return
+        qn = _qualname_for(code, modname)
+        if "<" in qn:  # lambdas / <locals> closures, like _should_wrap
+            return
+        name = code.co_name
+        if _FUNCS and name not in _FUNCS and qn not in _FUNCS:
+            return
+        key = modname + "::" + qn
+        if key in _full:  # fast path once we have enough samples
+            return
+        values = _frame_values(frame)
+        blob = pickle.dumps(values)
+    except Exception:
+        return
+    _store(key, blob)
+
+
+def _maybe_install_profile():
+    """Install the scoped profile iff a target module is the entry script.
+
+    Returns True if installed. We detect the entry module by its name (`__main__`
+    is the default for any `python script.py` / `python -m`), so the profile is
+    NEVER active when the targets are only imported library modules."""
+    global _profile_installed
+    main_mod = sys.modules.get("__main__")
+    main_name = getattr(main_mod, "__name__", None) if main_mod else None
+    if not _module_matches(main_name):
+        return False
+    sys.setprofile(_profiler)
+    # Also profile threads spawned after install (the entry script may use them).
+    try:
+        threading.setprofile(_profiler)
+    except Exception:
+        pass
+    _profile_installed = True
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # Flushing
 # --------------------------------------------------------------------------- #
 def _flush():
@@ -245,6 +408,13 @@ def install():
                 _wrap_module(mod)
             except Exception:
                 pass
+    # If the entry-point script itself is a target, add a scoped profile so its
+    # own top-level functions (module __main__, which is executed not imported)
+    # get captured too.
+    try:
+        _maybe_install_profile()
+    except Exception:
+        pass
     atexit.register(_flush)
     if _FLUSH_SECS > 0:
         threading.Thread(target=_periodic_flush, daemon=True).start()
