@@ -95,6 +95,8 @@ def main(argv=None) -> int:
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero (3) if any function could not be verified "
                          "(error/timeout), not just on divergence")
+    ap.add_argument("--no-minimize", action="store_true",
+                    help="don't shrink divergence witnesses to a minimal input")
     ns = ap.parse_args(raw[:split])
 
     repo = os.path.abspath(ns.repo)
@@ -142,7 +144,7 @@ def main(argv=None) -> int:
     try:
         label = "%s..%s" % (ns.base, ns.head)
         return replay_paths(base_path, head_path, records, label, python_exe,
-                            strict=ns.strict)
+                            strict=ns.strict, minimize=not ns.no_minimize)
     finally:
         _rm_worktree(repo, base_path)
         if head_path != repo:

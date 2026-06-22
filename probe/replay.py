@@ -175,17 +175,84 @@ def _split_key(key: str):
     return key, key  # legacy/loose form
 
 
-def _check_key(base_path, head_path, key, blobs, python_exe):
+def _simpler(v):
+    """Smaller candidate values of the same type, for witness minimization."""
+    out = []
+    if isinstance(v, str) and v:
+        out += ["", v[:1], v[:len(v) // 2]]
+    elif isinstance(v, (bytes, bytearray)) and v:
+        out += [type(v)(), v[:len(v) // 2]]
+    elif isinstance(v, (list, tuple)) and v:
+        t = type(v)
+        out += [t(), t(list(v)[:len(v) // 2]), t(list(v)[1:])]
+    elif isinstance(v, dict) and v:
+        out += [{}]
+    elif isinstance(v, bool):
+        pass
+    elif isinstance(v, int) and v not in (0,):
+        out += [0, v // 2]
+    elif isinstance(v, float) and v == v and v not in (0.0,):
+        out += [0.0]
+    return out
+
+
+def _diverges_on(base_path, head_path, module, qual, values, python_exe):
+    """True iff base and head soundly disagree on a single input `values`."""
+    blob = [pickle.dumps(list(values))]
+    b = _worker(base_path, module, qual, blob, python_exe)
+    h = _worker(head_path, module, qual, blob, python_exe)
+    if not (b.get("loaded") and h.get("loaded")) or not b.get("obs") or not h.get("obs"):
+        return False
+    ob, oh = b["obs"][0], h["obs"][0]
+    if _unsound([ob]) or _unsound([oh]):
+        return False
+    return not _same(ob, oh)
+
+
+def _minimize(base_path, head_path, module, qual, values, python_exe, cap=30):
+    """Shrink a diverging witness to a smaller still-diverging input (bounded)."""
+    cur = list(values)
+    evals = 0
+    changed = True
+    while changed and evals < cap:
+        changed = False
+        for i in range(len(cur)):
+            for cand in _simpler(cur[i]):
+                if evals >= cap:
+                    break
+                evals += 1
+                trial = list(cur)
+                trial[i] = cand
+                if _diverges_on(base_path, head_path, module, qual, trial, python_exe):
+                    cur = trial
+                    changed = True
+                    break
+    return cur
+
+
+def _check_key(base_path, head_path, key, blobs, python_exe, minimize=True):
     module_name, qualname = _split_key(key)
     blobs = blobs[:_REPLAY_MAX_ARGS]
     b = _worker(base_path, module_name, qualname, blobs, python_exe)
     h = _worker(head_path, module_name, qualname, blobs, python_exe)
-    verdict, note = _verdict(b, h, blobs)
+    verdict, note, idx = _verdict(b, h, blobs)
+    if verdict == "divergent" and minimize and idx is not None:
+        orig = _decode_blob(blobs[idx])
+        if orig is not None:
+            mini = _minimize(base_path, head_path, module_name, qualname, orig,
+                             python_exe)
+            try:
+                smaller = len(pickle.dumps(mini)) < len(pickle.dumps(list(orig)))
+            except Exception:
+                smaller = False
+            if smaller:
+                note += "\n      minimized: %s" % _short(mini)
     return (qualname, len(blobs), verdict, note)
 
 
 def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
-                 label: str, python_exe: str = None, strict: bool = False) -> int:
+                 label: str, python_exe: str = None, strict: bool = False,
+                 minimize: bool = True) -> int:
     """Compare two already-materialized versions (directories on disk).
 
     Per-function checks run in parallel (each spawns two short-lived worker
@@ -198,7 +265,8 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     parallelism = min(8, (os.cpu_count() or 2))
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallelism) as ex:
-        futures = [ex.submit(_check_key, base_path, head_path, k, records[k], python_exe)
+        futures = [ex.submit(_check_key, base_path, head_path, k, records[k],
+                             python_exe, minimize)
                    for k in keys]
         for fut in concurrent.futures.as_completed(futures):
             rows.append(fut.result())
@@ -284,25 +352,102 @@ def replay(repo: str, base: str, head: str, capture_path: str,
             _rm_worktree(repo, head_wt)
 
 
+def _render_canon(c, _d=0):
+    """Render a canonical observation form (canonical.py) back into a short,
+    human-readable string for divergence reports."""
+    try:
+        if not isinstance(c, list) or not c:
+            return json.dumps(c)
+        tag = c[0]
+        if tag == "none":
+            return "None"
+        if tag in ("bool", "int"):
+            return repr(c[1])
+        if tag == "float":
+            return "nan" if c[1] == "nan" else repr(c[1])
+        if tag == "str":
+            return repr(c[1])
+        if tag == "bytes":
+            return repr(bytes(c[1]))
+        if tag in ("list", "tuple", "iter", "set"):
+            items = c[1]
+            shown = ", ".join(_render_canon(x, _d + 1) for x in items[:8])
+            if len(items) > 8:
+                shown += ", ..."
+            wrap = {"list": "[%s]", "tuple": "(%s)", "set": "{%s}",
+                    "iter": "iter[%s]"}[tag]
+            return wrap % shown
+        if tag == "dict":
+            pairs = ", ".join("%s: %s" % (_render_canon(k, _d + 1),
+                                          _render_canon(v, _d + 1))
+                              for k, v in c[1][:8])
+            return "{%s}" % pairs
+        if tag in ("callable", "class"):
+            return "<%s %s>" % (tag, c[-1])
+        if tag == "range":
+            return "range(%r, %r, %r)" % (c[1], c[2], c[3])
+        if tag == "pub-obj":
+            inner = c[2][1][1] if len(c) > 2 and len(c[2]) > 1 else []
+            shown = ", ".join(_render_canon(x, _d + 1) for x in inner[:8])
+            return "%s(%s)" % (c[1], shown)
+        if tag == "obj":
+            return "%s(...)" % c[1]
+        if tag == "opaque":
+            return "<opaque %s>" % (c[1] if len(c) > 1 else "")
+        if tag == "maxdepth":
+            return "<...>"
+        return json.dumps(c)
+    except Exception:
+        return json.dumps(c) if isinstance(c, (list, dict, str, int, float)) else "?"
+
+
+def _render_obs(o):
+    if "exc" in o:
+        return "raises %s" % o["exc"]
+    if "val" in o:
+        return _render_canon(o["val"])
+    return "?"
+
+
+def _decode_blob(blob):
+    try:
+        return pickle.loads(blob)
+    except Exception:
+        return None
+
+
+def _short(values, limit=120):
+    try:
+        r = repr(tuple(values)) if isinstance(values, (list, tuple)) else repr(values)
+    except Exception:
+        return "<unreprable>"
+    return r if len(r) <= limit else r[:limit - 3] + "..."
+
+
 def _verdict(b: Dict, h: Dict, blobs):
+    """Return (verdict, note, div_idx). div_idx is the diverging input index for
+    a 'divergent' verdict (so the caller can minimize the witness), else None."""
     if b.get("error") or h.get("error"):
-        return "error", (b.get("error") or h.get("error"))
+        return "error", (b.get("error") or h.get("error")), None
     if not b.get("loaded") or not h.get("loaded"):
-        return "skipped", "not present in both versions"
+        return "skipped", "not present in both versions", None
     flag = _unsound(b["obs"]) or _unsound(h["obs"])
     if flag:
-        return "unverifiable", flag
+        return "unverifiable", flag, None
     if len(b["obs"]) != len(h["obs"]):
-        return "error", "observation count mismatch"
+        return "error", "observation count mismatch", None
     for i, (ob, oh) in enumerate(zip(b["obs"], h["obs"])):
         if not _same(ob, oh):
-            try:
-                arg = pickle.loads(base64.b64decode(
-                    base64.b64encode(blobs[i]).decode("ascii")))
-            except Exception:
-                arg = "?"
-            return "divergent", "@ input #%d %r" % (i, arg)
-    return "equivalent", ""
+            arg = _decode_blob(blobs[i])
+            note = ("@ input #%d\n      input : %s\n      base  : %s"
+                    "\n      head  : %s" % (i, _short(arg), _render_obs(ob),
+                                            _render_obs(oh)))
+            # method that returns the same value but mutates self differently
+            if ob.get("val") == oh.get("val") and ob.get("exc") == oh.get("exc") \
+                    and ob.get("self_after") != oh.get("self_after"):
+                note += "\n      (receiver state differs after the call)"
+            return "divergent", note, i
+    return "equivalent", "", None
 
 
 def main(argv=None) -> int:

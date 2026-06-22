@@ -1017,6 +1017,30 @@ class TestCaptureReentrancy(unittest.TestCase):
             h._full.discard("m::target")
 
 
+class TestDivergenceDetail(unittest.TestCase):
+    def test_render_canon_basics(self):
+        from probe.replay import _render_canon
+        self.assertEqual(_render_canon(["str", "caf"]), "'caf'")
+        self.assertEqual(_render_canon(["int", 5]), "5")
+        self.assertEqual(_render_canon(["none"]), "None")
+        self.assertEqual(_render_canon(["float", "nan"]), "nan")
+        self.assertEqual(_render_canon(["list", [["int", 1], ["int", 2]]]), "[1, 2]")
+        self.assertEqual(_render_canon(["opaque", "Foo", "x"]), "<opaque Foo>")
+
+    def test_render_obs_value_and_exc(self):
+        from probe.replay import _render_obs
+        self.assertEqual(_render_obs({"val": ["str", "x"]}), "'x'")
+        self.assertEqual(_render_obs({"exc": "ValueError"}), "raises ValueError")
+
+    def test_simpler_shrinks_each_type(self):
+        from probe.replay import _simpler
+        self.assertIn("", _simpler("hello"))
+        self.assertIn(0, _simpler(40))
+        self.assertEqual(_simpler(0), [])          # already minimal
+        self.assertEqual(_simpler(True), [])       # bools aren't shrunk
+        self.assertTrue(any(x == [] for x in _simpler([1, 2, 3])))
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)
