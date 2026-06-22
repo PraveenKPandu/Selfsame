@@ -59,6 +59,12 @@ def _requires_python(repo: str):
     return None
 
 
+def _key_in_modules(key: str, modules) -> bool:
+    """True if a 'module::qualname' key belongs to one of the target modules."""
+    mod = key.split("::", 1)[0]
+    return any(mod == m or mod.startswith(m + ".") for m in modules)
+
+
 def _py_version(python_exe: str):
     try:
         out = subprocess.check_output(
@@ -128,14 +134,33 @@ def main(argv=None) -> int:
     total = sum(len(v) for v in records.values())
     print("captured %d arg-sets across %d functions" % (total, len(records)))
 
+    # Blind-spot report: which functions changed between base and head but have
+    # NO captured inputs — i.e. no test exercises them, so they cannot be
+    # verified. This keeps "all equivalent" honest about what was NOT checked.
+    changed = changed_keys(repo, ns.base, ns.head)
+    changed_here = {k for k in changed if _key_in_modules(k, modules)}
+    uncovered = sorted(changed_here - set(records))
+
     if ns.changed_only:
-        changed = changed_keys(repo, ns.base, ns.head)
         records = {k: v for k, v in records.items() if k in changed}
-        print("diff %s..%s touches %d functions; %d of them have captured inputs"
-              % (ns.base, ns.head, len(changed), len(records)))
-        if not records:
-            print("\nNo changed-and-tested functions to check — nothing to verify.")
-            return 0
+        print("diff %s..%s touches %d changed function(s) in %s; %d have "
+              "captured inputs" % (ns.base, ns.head, len(changed_here),
+                                   ns.modules, len(records)))
+
+    if changed_here:
+        covered = len(changed_here) - len(uncovered)
+        print("\nChanged functions in %s: %d  (with test inputs: %d, WITHOUT: %d)"
+              % (ns.modules, len(changed_here), covered, len(uncovered)))
+        if uncovered:
+            print("  unverified — no test exercises these:")
+            for k in uncovered[:25]:
+                print("    - %s" % k)
+            if len(uncovered) > 25:
+                print("    ... and %d more" % (len(uncovered) - 25))
+
+    if ns.changed_only and not records:
+        print("\nNo changed-and-tested functions to check — nothing to verify.")
+        return 0
     print("")
 
     base_path = _add_worktree(repo, ns.base, modules)

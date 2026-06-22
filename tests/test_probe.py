@@ -1041,6 +1041,25 @@ class TestDivergenceDetail(unittest.TestCase):
         self.assertTrue(any(x == [] for x in _simpler([1, 2, 3])))
 
 
+class TestBlindSpot(unittest.TestCase):
+    def test_key_in_modules(self):
+        from probe.verify import _key_in_modules
+        mods = ["humanize", "slugify"]
+        self.assertTrue(_key_in_modules("humanize::intcomma", mods))
+        self.assertTrue(_key_in_modules("humanize.number::_x", mods))  # submodule
+        self.assertFalse(_key_in_modules("other.pkg::f", mods))
+        self.assertFalse(_key_in_modules("humanizer::f", mods))        # prefix trap
+
+    def test_uncovered_is_changed_minus_captured(self):
+        from probe.verify import _key_in_modules
+        mods = ["pkg"]
+        changed = {"pkg::a", "pkg::b", "pkg.sub::c", "other::d"}
+        captured = {"pkg::a"}
+        changed_here = {k for k in changed if _key_in_modules(k, mods)}
+        uncovered = sorted(changed_here - captured)
+        self.assertEqual(uncovered, ["pkg.sub::c", "pkg::b"])  # 'other::d' excluded
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)
