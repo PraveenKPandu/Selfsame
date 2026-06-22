@@ -571,3 +571,31 @@ the verdict path stays deterministic):
 
 Suite 95 -> 107. Verdict path remains fully deterministic; everything new is
 either input-side (minimize), reporting, or honest re-classification.
+
+## 20. Agent-consumable report (Selfsame for AI-driven development)
+
+The tool is meant to run alongside AI coding agents to surface the deterministic
+behavior of changes — so the *consumer* is an agent, not only a human at a
+terminal. Two gaps: (a) nothing told a caller it ran or where results were;
+(b) `--json-out` lacked references an agent could navigate.
+
+Now `verify` always writes **.selfsame/report.json + report.md** (opt out with
+--no-report; relocate with --report-dir) and prints a one-line machine summary:
+
+    selfsame: 3 equivalent · 0 divergent · 1 interface-change · ... → .selfsame/report.json
+
+report.json (schema 1) is rich and references the source:
+- per function: key, **file:line**, verdict, base/head rendered, witness,
+  minimized witness, soundness reason, interface-change params, inputs checked;
+- top-level: summary (with interface_change, functions_checked), environment
+  (python/base/head/modules), and **unverified_changed** (changed functions with
+  no test inputs) each with file:line.
+report.md is structured for an LLM. `extract.function_references()` resolves
+file:line per key from the working-tree AST.
+
+Still on the table for full AI-workflow fit (deferred): snapshot/characterization
+mode (base = a saved behavior file, so no two git branches are needed — the unlock
+for single-version generate→regenerate loops), N-way differential of multiple AI
+generations, and a pytest plugin for auto-run. The honest boundary: a deterministic
+tool verifies behavior *change/agreement*, not *correctness* (correctness needs an
+independent spec/oracle); its value compounds from the second iteration onward.

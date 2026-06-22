@@ -129,6 +129,60 @@ def _func_segments(src: str):
     return out
 
 
+def _func_locations(src: str):
+    """{qualname: lineno} for top-level functions AND methods (Class.method)."""
+    out = {}
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return out
+
+    def visit(node, prefix):
+        for child in getattr(node, "body", []):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out[prefix + child.name] = child.lineno
+            elif isinstance(child, ast.ClassDef):
+                visit(child, prefix + child.name + ".")
+
+    visit(tree, "")
+    return out
+
+
+def _module_file(repo: str, module: str):
+    """Repo-relative path to a module's source file (flat or src/ layout)."""
+    base = module.replace(".", "/")
+    for cand in (base + ".py", base + "/__init__.py",
+                 "src/" + base + ".py", "src/" + base + "/__init__.py"):
+        if os.path.isfile(os.path.join(repo, cand)):
+            return cand
+    return None
+
+
+def function_references(repo: str, keys):
+    """Map 'module::qualname' -> {'file': repo-relative path, 'line': int} by
+    parsing the working-tree source of each module. Best-effort; missing entries
+    are simply omitted."""
+    refs = {}
+    by_module = {}
+    for key in keys:
+        mod = key.split("::", 1)[0]
+        by_module.setdefault(mod, []).append(key)
+    for mod, mod_keys in by_module.items():
+        rel = _module_file(repo, mod)
+        if not rel:
+            continue
+        try:
+            with open(os.path.join(repo, rel)) as f:
+                locs = _func_locations(f.read())
+        except OSError:
+            continue
+        for key in mod_keys:
+            qn = key.split("::", 1)[1]
+            if qn in locs:
+                refs[key] = {"file": rel, "line": locs[qn]}
+    return refs
+
+
 def changed_keys(repo: str, base: str, head: str):
     """Set of 'module::qualname' for functions/methods whose body changed between
     base and head (head == 'WORKTREE' compares against the working tree)."""
