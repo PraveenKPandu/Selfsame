@@ -1284,6 +1284,48 @@ class TestSnapshotDrift(unittest.TestCase):
         finally:
             shutil.rmtree(repo, ignore_errors=True)
 
+    def test_drift_changed_only_scopes_to_changed_functions(self):
+        import contextlib
+        import io
+        import shutil
+        import tempfile
+
+        from probe import snapshot as S
+        repo = tempfile.mkdtemp(prefix="probe_snap_")
+        try:
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "t@t.t")
+            self._git(repo, "config", "user.name", "t")
+            os.makedirs(os.path.join(repo, "app"))
+            open(os.path.join(repo, "app", "__init__.py"), "w").close()
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def a(x):\n    return x + 1\n\n"
+                        "def b(x):\n    return x * 2\n")
+            with open(os.path.join(repo, "test_app.py"), "w") as f:
+                f.write("from app.core import a, b\n"
+                        "def test_ab():\n    assert a(1) == 2\n    assert b(2) == 4\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "commit", "-m", "v1")
+
+            snap_path = os.path.join(repo, ".selfsame", "snapshot.json")
+            S.record_snapshot(repo, ["app"], [sys.executable, "-m", "pytest", "-q"],
+                              snap_path, sys.executable)
+
+            # change only b (a regression); a's source is untouched
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def a(x):\n    return x + 1\n\n"
+                        "def b(x):\n    return x * 3\n")   # regressed
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = S.check_drift(repo, snap_path, python_exe=sys.executable,
+                                     write_report=False, changed_only=True)
+            out = buf.getvalue()
+            self.assertEqual(code, 1)                  # b regressed -> divergence
+            self.assertIn("1 of 2 snapshot function", out)   # only b replayed
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
 
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
