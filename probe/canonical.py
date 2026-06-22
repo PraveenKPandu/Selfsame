@@ -11,9 +11,14 @@ structural rules but emits plain JSON, so two canonical forms are equal iff
 from __future__ import annotations
 
 import collections.abc
+import datetime as _dt
+import decimal as _decimal
+import fractions as _fractions
 import json
 import math
 import os
+import pathlib as _pathlib
+import re as _re
 import types
 from typing import Any
 
@@ -101,6 +106,63 @@ def _public_snapshot(value: Any, _depth: int):
     return ["pub-obj", cls.__qualname__, snap]
 
 
+def _tzname(v):
+    try:
+        return v.tzname()
+    except Exception:
+        return None
+
+
+def _leaf_value(value, _depth):
+    """Sound canonical form for common stdlib value types that otherwise have no
+    comparable structure (datetime, Decimal, Path, re.Match, ...).
+
+    Each uses the value's OBSERVABLE form, so two values canonicalize equal iff
+    they are observationally indistinguishable. That gives both guarantees at
+    once: observationally-identical values never read as a divergence (no false
+    divergence), and observationally-different values never read as equivalent
+    (no false equivalence). Returns None for anything that isn't a known leaf
+    type, so the caller falls through to the existing object/opaque handling.
+    """
+    # datetime must be checked before date (datetime subclasses date).
+    if isinstance(value, _dt.datetime):
+        return ["datetime", value.isoformat(), value.fold, _tzname(value)]
+    if isinstance(value, _dt.date):
+        return ["date", value.isoformat()]
+    if isinstance(value, _dt.time):
+        return ["time", value.isoformat(), value.fold, _tzname(value)]
+    if isinstance(value, _dt.timedelta):
+        return ["timedelta", value.days, value.seconds, value.microseconds]
+    if isinstance(value, _dt.tzinfo):
+        off = value.utcoffset(None)
+        return ["tzinfo", value.tzname(None),
+                off.total_seconds() if off is not None else None]
+    if isinstance(value, _decimal.Decimal):
+        if value.is_nan():
+            return ["decimal", "nan"]
+        if value.is_infinite():
+            return ["decimal", "inf" if value > 0 else "-inf"]
+        return ["decimal", str(value)]
+    if isinstance(value, complex):
+        return ["complex", canonical(value.real, _depth + 1),
+                canonical(value.imag, _depth + 1)]
+    if isinstance(value, _fractions.Fraction):
+        return ["fraction", value.numerator, value.denominator]
+    if isinstance(value, _pathlib.PurePath):
+        return ["path", str(value)]
+    if isinstance(value, _re.Match):
+        return ["match", canonical(value.re.pattern, _depth + 1),
+                list(value.span()), canonical(value.groups(), _depth + 1),
+                canonical(sorted(value.groupdict().items()), _depth + 1)]
+    if isinstance(value, _re.Pattern):
+        return ["pattern", canonical(value.pattern, _depth + 1), value.flags]
+    if value is NotImplemented:
+        return ["singleton", "NotImplemented"]
+    if value is Ellipsis:
+        return ["singleton", "Ellipsis"]
+    return None
+
+
 def canonical(value: Any, _depth: int = 0) -> Any:
     if _depth > _MAX_DEPTH:
         return ["maxdepth"]
@@ -148,6 +210,16 @@ def canonical(value: Any, _depth: int = 0) -> Any:
     # range: exact and lazy — represent by its bounds, not by materializing.
     if isinstance(value, range):
         return ["range", value.start, value.stop, value.step]
+
+    # Common stdlib leaf value types (datetime, Decimal, Path, re.Match, ...) by
+    # their observable form. Guarded: a pathological tzinfo/object that raises
+    # falls through to the existing object/opaque handling, never breaking a run.
+    try:
+        leaf = _leaf_value(value, _depth)
+    except Exception:
+        leaf = None
+    if leaf is not None:
+        return leaf
 
     # Lazy iterators/generators: the behavior IS the sequence they yield, so
     # materialize (bounded) and compare that. Unbounded -> refuse (opaque).
