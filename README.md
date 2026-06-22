@@ -52,6 +52,13 @@ the current code and reports each deviation (with base-vs-head witness and
 measures *deviation*, not correctness — and only over the inputs your tests
 exercised (the report names changed functions that have no test coverage).
 
+The output scales with **tested behavioral surface that actually changed**, not
+lines of code: new code has no baseline (0 flags), behavior-preserving rewrites
+stay `equivalent`, and only real deviations at tested inputs are flagged. At high
+change velocity, `selfsame drift --changed-only` replays just the functions whose
+source moved since the snapshot (cost tracks the touched surface), and lists
+changed functions with no baseline separately.
+
 ## Commands
 
 | command | what it does |
