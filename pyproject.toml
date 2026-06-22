@@ -3,8 +3,8 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "coverage-probe"
-version = "0.1.0"
+name = "selfsame"
+version = "0.1.1"
 description = "Sound behavior-equivalence verification for refactors, using your own tests for inputs"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -22,6 +22,7 @@ dependencies = []
 Homepage = "https://github.com/PraveenKPandu/Selfsame"
 
 [project.scripts]
+selfsame = "probe.cli:main"
 probe = "probe.cli:main"
 
 [tool.setuptools]
