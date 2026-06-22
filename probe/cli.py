@@ -16,6 +16,8 @@ _USAGE = __doc__
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    from . import _procs
+    _procs.install()  # reap child subprocesses if the probe is killed/interrupted
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(_USAGE)
         return 0 if argv else 2

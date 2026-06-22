@@ -21,6 +21,8 @@ import sys
 import tempfile
 from typing import Dict, List, Optional
 
+from . import _procs
+
 # Replay every captured arg-set by default: capping the count silently drops the
 # inputs that trigger a divergence (a missed catch), and it doesn't rescue heavy
 # functions anyway (they hit the worker timeout regardless). Speed comes from
@@ -47,9 +49,9 @@ def _worker(worktree, module_name, qualname, blobs, python_exe=None) -> Dict:
         "args_b64": [base64.b64encode(b).decode("ascii") for b in blobs],
     })
     try:
-        proc = subprocess.run([python_exe or sys.executable, "-m", "probe._replay_worker"],
-                              input=job, capture_output=True, text=True,
-                              timeout=_WORKER_TIMEOUT, env=env, cwd=_repo_root())
+        proc = _procs.run([python_exe or sys.executable, "-m", "probe._replay_worker"],
+                          input=job, capture_output=True, text=True,
+                          timeout=_WORKER_TIMEOUT, env=env, cwd=_repo_root())
     except subprocess.TimeoutExpired:
         return {"loaded": False, "error": "timeout", "obs": []}
     if proc.returncode != 0 or not proc.stdout.strip():
@@ -130,6 +132,7 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     subprocesses), and each function replays at most _REPLAY_MAX_ARGS inputs."""
     print("Replay: %s  (%d functions, real captured inputs)" % (label, len(records)))
     print("=" * 74)
+    _procs.install()  # main thread: ensure worker subprocesses are reaped on kill
 
     keys = sorted(records)
     parallelism = min(8, (os.cpu_count() or 2))
