@@ -1,24 +1,27 @@
+Metadata-Version: 2.4
+Name: coverage-probe
+Version: 0.1.0
+Summary: Sound behavior-equivalence verification for refactors, using your own tests for inputs
+Author: PraveenKPandu
+License: MIT
+Project-URL: Homepage, https://github.com/PraveenKPandu/Selfsame
+Keywords: refactoring,equivalence,testing,verification,ci
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Software Development :: Testing
+Classifier: Topic :: Software Development :: Quality Assurance
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
 # Coverage Probe — Implementation
 
 A runnable implementation of the go/no-go experiment for the behavior-equivalence
 verifier. It measures **verifiable coverage**: the fraction of code changes where a
 deterministic harness can make a trustworthy equivalence verdict.
 
-## Install
-
-```bash
-pip install -e .          # provides a `probe` command
-probe demo                # run the built-in corpus
-probe verify --base main --modules mypkg -- pytest -q
-```
-
-(Everything also works without installing, via `python3 -m probe.<cmd>` or the
-scripts below.)
-
 ## Run
 
 ```bash
-python3 run_probe.py      # or: probe demo
+python3 run_probe.py
 ```
 
 No third-party dependencies (pure stdlib). It re-execs once to fix `PYTHONHASHSEED=0`

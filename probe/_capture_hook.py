@@ -24,11 +24,12 @@ _DIR = os.environ.get("PROBE_CAPTURE_DIR")
 _MODULES = tuple(m for m in os.environ.get("PROBE_CAPTURE_MODULES", "").split(",") if m)
 _FUNCS = set(f for f in os.environ.get("PROBE_CAPTURE_FUNCS", "").split(",") if f)
 _CAP_PER_FUNC = 300
-# Safety valve: stop profiling after this many call events so a heavy suite
-# can't make capture run unboundedly. Kept modest because test-runner startup
-# alone (pytest collection, fixtures) generates a huge call volume, and the
-# profile callback pays a per-call cost on every one. We keep what we captured.
-_MAX_EVENTS = int(os.environ.get("PROBE_CAPTURE_MAX_EVENTS", "600000"))
+# Safety valve: stop profiling after this many call events so a heavy/stress
+# suite can't make capture run unboundedly (the profile callback pays a per-call
+# cost on every call in the process). Set high enough to capture a normal unit
+# suite in full; pathological suites can lower it via the env var. The proper fix
+# for the overhead is targeted wrapping (only instrument the target functions).
+_MAX_EVENTS = int(os.environ.get("PROBE_CAPTURE_MAX_EVENTS", "5000000"))
 
 _records = {}   # qualname -> list[pickled values]
 _seen = {}      # qualname -> set[hash]

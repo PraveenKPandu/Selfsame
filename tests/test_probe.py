@@ -424,6 +424,20 @@ class TestChangedDetection(unittest.TestCase):
         self.assertNotEqual(a["f"], b["f"])
 
 
+class TestCLI(unittest.TestCase):
+    def test_dispatch(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from probe import cli
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["--help"]), 0)
+            self.assertEqual(cli.main([]), 2)
+            self.assertEqual(cli.main(["bogus-cmd"]), 2)
+        self.assertIn("probe verify", buf.getvalue())
+
+
 class TestVersionSupport(unittest.TestCase):
     def test_requires_python_from_pyproject(self):
         import os
