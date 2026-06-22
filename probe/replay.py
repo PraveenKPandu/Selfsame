@@ -248,11 +248,13 @@ def _check_key(base_path, head_path, key, blobs, python_exe, minimize=True):
             if smaller:
                 note += "\n      minimized: %s" % _short(mini)
                 detail["minimized"] = _short(mini)
+    detail["key"] = key
     return (qualname, len(blobs), verdict, note, detail)
 
 
-def _write_machine_reports(label, rows, tally, n_timeout, uncovered,
-                           json_out, junit_out):
+def _build_report(label, rows, tally, n_timeout, uncovered, refs, env):
+    """Assemble the agent-consumable report: structured, with file:line
+    references, soundness reasons, and what was NOT verified."""
     summary = {
         "equivalent": tally.get("equivalent", 0),
         "divergent": tally.get("divergent", 0),
@@ -261,18 +263,88 @@ def _write_machine_reports(label, rows, tally, n_timeout, uncovered,
         "error": tally.get("error", 0) - n_timeout,
         "timeout": n_timeout,
         "skipped": tally.get("skipped", 0),
+        "functions_checked": len(rows),
     }
-    results = [dict(function=r[0], inputs=r[1], verdict=r[2], **r[4]) for r in rows]
-    if json_out:
-        payload = {"label": label, "summary": summary, "results": results,
-                   "unverified_changed": list(uncovered)}
-        try:
-            with open(json_out, "w") as f:
-                json.dump(payload, f, indent=2)
-        except OSError:
-            pass
-    if junit_out:
-        _write_junit(label, rows, junit_out)
+    results = []
+    for r in rows:
+        d = dict(r[4])
+        key = d.pop("key", r[0])
+        item = {"function": r[0], "key": key, "inputs": r[1], "verdict": r[2]}
+        ref = refs.get(key)
+        if ref:
+            item["file"] = ref.get("file")
+            item["line"] = ref.get("line")
+        item.update(d)
+        results.append(item)
+    unverified = []
+    for key in uncovered:
+        entry = {"key": key}
+        if refs.get(key):
+            entry.update(refs[key])
+        unverified.append(entry)
+    return {"tool": "selfsame", "schema": 1, "label": label, "environment": env,
+            "summary": summary, "results": results,
+            "unverified_changed": unverified}
+
+
+def _render_markdown(report):
+    """Render the report as Markdown written for an LLM agent to consume."""
+    s = report["summary"]
+    env = report.get("environment") or {}
+    out = ["# Selfsame behavior report", ""]
+    out.append("Comparison: `%s`" % report["label"])
+    if env:
+        out.append("Environment: " + ", ".join("%s=%s" % (k, v)
+                                                for k, v in env.items() if v))
+    out += ["",
+            "## Summary",
+            "- equivalent: %d" % s["equivalent"],
+            "- **divergent: %d** (behavior changed at a tested input)" % s["divergent"],
+            "- interface-change: %d (signature/API changed)" % s["interface_change"],
+            "- unverifiable: %d (refused: io/threads/nondeterminism/opaque)"
+            % s["unverifiable"],
+            "- not run: %d error, %d timeout, %d skipped"
+            % (s["error"], s["timeout"], s["skipped"]),
+            ""]
+    divs = [r for r in report["results"] if r["verdict"] == "divergent"]
+    if divs:
+        out += ["## Divergences (behavior changed)", ""]
+        for r in divs:
+            loc = (" — `%s:%s`" % (r["file"], r["line"])) if r.get("file") else ""
+            out.append("### `%s`%s" % (r["key"], loc))
+            if "input" in r:
+                out.append("- input: `%s`" % r["input"])
+            if "base" in r:
+                out.append("- base: `%s`" % r["base"])
+            if "head" in r:
+                out.append("- head: `%s`" % r["head"])
+            if "minimized" in r:
+                out.append("- minimized witness: `%s`" % r["minimized"])
+            out.append("")
+    ifaces = [r for r in report["results"] if r["verdict"] == "interface-change"]
+    if ifaces:
+        out += ["## Interface changes (not behavior regressions)", ""]
+        for r in ifaces:
+            loc = (" — `%s:%s`" % (r["file"], r["line"])) if r.get("file") else ""
+            out.append("- `%s`%s: %s" % (r["key"], loc, r.get("interface", "")))
+        out.append("")
+    refused = [r for r in report["results"] if r["verdict"] == "unverifiable"]
+    if refused:
+        out += ["## Refused (could not be soundly compared)", ""]
+        for r in refused:
+            out.append("- `%s`: %s" % (r["key"], r.get("reason", "")))
+        out.append("")
+    if report["unverified_changed"]:
+        out += ["## Unverified — changed but no test exercises them", ""]
+        for e in report["unverified_changed"]:
+            loc = (" — `%s:%s`" % (e["file"], e["line"])) if e.get("file") else ""
+            out.append("- `%s`%s" % (e["key"], loc))
+        out.append("")
+    out += ["## Equivalent (behavior preserved)", ""]
+    eqs = [r for r in report["results"] if r["verdict"] == "equivalent"]
+    out.append(", ".join("`%s`" % r["function"] for r in eqs) or "_none_")
+    out.append("")
+    return "\n".join(out)
 
 
 def _xml_escape(s):
@@ -310,7 +382,9 @@ def _write_junit(label, rows, path):
 def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
                  label: str, python_exe: str = None, strict: bool = False,
                  minimize: bool = True, json_out: str = None,
-                 junit_out: str = None, extra=None) -> int:
+                 junit_out: str = None, extra=None, refs=None,
+                 report_dir: str = ".selfsame", write_report: bool = True,
+                 env=None) -> int:
     """Compare two already-materialized versions (directories on disk).
 
     Per-function checks run in parallel (each spawns two short-lived worker
@@ -340,10 +414,6 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     n_error = tally.get("error", 0) - n_timeout
     n_skipped = tally.get("skipped", 0)
     n_div = tally.get("divergent", 0)
-
-    if json_out or junit_out:
-        _write_machine_reports(label, rows, tally, n_timeout, extra or [],
-                               json_out, junit_out)
 
     n_iface = tally.get("interface-change", 0)
     _marks = {"divergent": "X", "error": "!", "interface-change": "~"}
@@ -378,6 +448,42 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
         print("  note: %d hit the %ds worker timeout (PROBE_WORKER_TIMEOUT) — "
               "raise it or reduce load; a timeout is NOT a divergence."
               % (n_timeout, _WORKER_TIMEOUT))
+
+    # Agent-consumable report: structured JSON + LLM-friendly Markdown, written
+    # to a stable location so a tool/agent always knows where to find results.
+    report = _build_report(label, rows, tally, n_timeout, extra or [],
+                           refs or {}, env or {})
+    written = []
+    targets = []
+    if write_report and report_dir:
+        targets.append((os.path.join(report_dir, "report.json"), "json"))
+        targets.append((os.path.join(report_dir, "report.md"), "md"))
+    if json_out:
+        targets.append((json_out, "json"))
+    for path, kind in targets:
+        try:
+            d = os.path.dirname(path)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(path, "w") as f:
+                if kind == "json":
+                    json.dump(report, f, indent=2)
+                else:
+                    f.write(_render_markdown(report))
+            written.append(path)
+        except OSError:
+            pass
+    if junit_out:
+        _write_junit(label, rows, junit_out)
+        written.append(junit_out)
+
+    s = report["summary"]
+    print("\nselfsame: %d equivalent · %d divergent · %d interface-change · "
+          "%d unverifiable · %d error · %d timeout · %d unverified-changed%s"
+          % (s["equivalent"], s["divergent"], s["interface_change"],
+             s["unverifiable"], s["error"], s["timeout"],
+             len(report["unverified_changed"]),
+             ("  →  " + written[0]) if written else ""))
 
     code = _exit_code(rows, strict)
     if code == 3:

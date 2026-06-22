@@ -16,9 +16,14 @@ target supports. Pass --python /path/to/pythonX.Y to run the test command and th
 replay workers under that interpreter; the repo's requires-python is checked and
 a mismatch is reported loudly instead of silently capturing nothing.
 
-Machine-readable output (for CI/tooling):
-  --json-out PATH   structured JSON report (summary, per-function verdicts with
-                    base/head/minimized witness, and changed-but-untested funcs)
+Reports: by default writes .selfsame/report.json and .selfsame/report.md (rich,
+agent-consumable: per-function verdict with file:line, base/head/minimized
+witness, soundness reason, and changed-but-untested functions), and prints a
+one-line machine summary pointing at them. Use --report-dir to relocate or
+--no-report to disable.
+
+Extra machine-readable output (for CI/tooling):
+  --json-out PATH   also write the JSON report to this path
   --junit-xml PATH  JUnit XML (divergent -> failure, error/timeout -> error)
 
 Config: defaults may be set in [tool.selfsame] of pyproject.toml (or a
@@ -44,7 +49,7 @@ import subprocess
 import sys
 
 from .capture import capture_command
-from .extract import changed_keys
+from .extract import changed_keys, function_references
 from .replay import _add_worktree, _rm_worktree, replay_paths
 
 
@@ -143,9 +148,13 @@ def main(argv=None) -> int:
     ap.add_argument("--no-minimize", action="store_true",
                     help="don't shrink divergence witnesses to a minimal input")
     ap.add_argument("--json-out", default=None,
-                    help="write a machine-readable JSON report to this path")
+                    help="also write the JSON report to this extra path")
     ap.add_argument("--junit-xml", default=None,
                     help="write a JUnit XML report to this path (for CI)")
+    ap.add_argument("--report-dir", default=".selfsame",
+                    help="directory for report.json + report.md (default .selfsame)")
+    ap.add_argument("--no-report", action="store_true",
+                    help="don't write the default .selfsame/ report files")
     ns = ap.parse_args(raw[:split])
 
     repo = os.path.abspath(ns.repo)
@@ -228,6 +237,11 @@ def main(argv=None) -> int:
         return 0
     print("")
 
+    # file:line references for every function in the report (checked + blind spots)
+    refs = function_references(repo, set(records) | changed_here)
+    env = {"python": python_exe, "base": ns.base, "head": ns.head,
+           "modules": ns.modules}
+
     base_path = _add_worktree(repo, ns.base, modules)
     head_path = (repo if ns.head == "WORKTREE"
                  else _add_worktree(repo, ns.head, modules))
@@ -236,7 +250,9 @@ def main(argv=None) -> int:
         return replay_paths(base_path, head_path, records, label, python_exe,
                             strict=ns.strict, minimize=not ns.no_minimize,
                             json_out=ns.json_out, junit_out=ns.junit_xml,
-                            extra=uncovered)
+                            extra=uncovered, refs=refs, env=env,
+                            report_dir=ns.report_dir,
+                            write_report=not ns.no_report)
     finally:
         _rm_worktree(repo, base_path)
         if head_path != repo:

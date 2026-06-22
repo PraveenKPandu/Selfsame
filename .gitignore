@@ -6,3 +6,9 @@ name-claim/*/build/
 *.egg-info/
 name-claim/npm/node_modules/
 name-claim/crates/target/
+
+# build artifacts
+build/
+
+# selfsame reports
+.selfsame/

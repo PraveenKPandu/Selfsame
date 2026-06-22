@@ -1063,30 +1063,41 @@ class TestBlindSpot(unittest.TestCase):
 class TestMachineReports(unittest.TestCase):
     def _rows(self):
         return [
-            ("a", 3, "equivalent", "", {}),
+            ("a", 3, "equivalent", "", {"key": "m::a"}),
             ("b", 5, "divergent", "@ input #0",
-             {"input": "(1,)", "base": "1", "head": "2", "minimized": "(1,)"}),
-            ("c", 2, "error", "timeout", {"error": "timeout"}),
-            ("d", 1, "unverifiable", "opaque-return", {"reason": "opaque-return"}),
+             {"key": "m::b", "input": "(1,)", "base": "1", "head": "2",
+              "minimized": "(1,)"}),
+            ("c", 2, "error", "timeout", {"key": "m::c", "error": "timeout"}),
+            ("d", 1, "unverifiable", "opaque-return",
+             {"key": "m::d", "reason": "opaque-return"}),
         ]
 
-    def test_json_report(self):
-        import json
-        import tempfile
-
-        from probe.replay import _write_machine_reports
+    def test_build_report_with_references(self):
+        from probe.replay import _build_report
         tally = {"equivalent": 1, "divergent": 1, "error": 1, "unverifiable": 1}
-        p = os.path.join(tempfile.mkdtemp(), "r.json")
-        _write_machine_reports("base..head", self._rows(), tally, 1, ["pkg::x"],
-                               p, None)
-        with open(p) as f:
-            data = json.load(f)
-        self.assertEqual(data["summary"]["divergent"], 1)
-        self.assertEqual(data["summary"]["timeout"], 1)
-        self.assertEqual(data["summary"]["error"], 0)   # 1 error - 1 timeout
-        b = [r for r in data["results"] if r["function"] == "b"][0]
+        refs = {"m::b": {"file": "m.py", "line": 10},
+                "m::x": {"file": "m.py", "line": 99}}
+        rep = _build_report("base..head", self._rows(), tally, 1, ["m::x"], refs,
+                            {"python": "p"})
+        self.assertEqual(rep["summary"]["divergent"], 1)
+        self.assertEqual(rep["summary"]["timeout"], 1)
+        self.assertEqual(rep["summary"]["error"], 0)    # 1 error - 1 timeout
+        b = [r for r in rep["results"] if r["function"] == "b"][0]
         self.assertEqual(b["head"], "2")
-        self.assertEqual(data["unverified_changed"], ["pkg::x"])
+        self.assertEqual((b["file"], b["line"]), ("m.py", 10))   # reference merged
+        self.assertEqual(rep["unverified_changed"],
+                         [{"key": "m::x", "file": "m.py", "line": 99}])
+
+    def test_render_markdown(self):
+        from probe.replay import _build_report, _render_markdown
+        rep = _build_report("base..head", self._rows(), {"divergent": 1}, 0,
+                            ["m::x"], {"m::b": {"file": "m.py", "line": 10}}, {})
+        md = _render_markdown(rep)
+        self.assertIn("# Selfsame behavior report", md)
+        self.assertIn("Divergences", md)
+        self.assertIn("m::b", md)
+        self.assertIn("m.py:10", md)        # reference rendered
+        self.assertIn("Unverified", md)
 
     def test_junit_report_is_well_formed(self):
         import tempfile
