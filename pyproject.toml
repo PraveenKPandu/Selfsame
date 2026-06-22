@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coverage-probe"
+version = "0.1.0"
+description = "Sound behavior-equivalence verification for refactors, using your own tests for inputs"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "PraveenKPandu" }]
+keywords = ["refactoring", "equivalence", "testing", "verification", "ci"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/PraveenKPandu/Selfsame"
+
+[project.scripts]
+probe = "probe.cli:main"
+
+[tool.setuptools]
+packages = ["probe", "units"]

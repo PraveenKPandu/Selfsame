@@ -1,24 +1,27 @@
+Metadata-Version: 2.4
+Name: coverage-probe
+Version: 0.1.0
+Summary: Sound behavior-equivalence verification for refactors, using your own tests for inputs
+Author: PraveenKPandu
+License: MIT
+Project-URL: Homepage, https://github.com/PraveenKPandu/Selfsame
+Keywords: refactoring,equivalence,testing,verification,ci
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Software Development :: Testing
+Classifier: Topic :: Software Development :: Quality Assurance
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
 # Coverage Probe — Implementation
 
 A runnable implementation of the go/no-go experiment for the behavior-equivalence
 verifier. It measures **verifiable coverage**: the fraction of code changes where a
 deterministic harness can make a trustworthy equivalence verdict.
 
-## Install
-
-```bash
-pip install -e .          # provides a `probe` command
-probe demo                # run the built-in corpus
-probe verify --base main --modules mypkg -- pytest -q
-```
-
-(Everything also works without installing, via `python3 -m probe.<cmd>` or the
-scripts below.)
-
 ## Run
 
 ```bash
-python3 run_probe.py      # or: probe demo
+python3 run_probe.py
 ```
 
 No third-party dependencies (pure stdlib). It re-execs once to fix `PYTHONHASHSEED=0`
@@ -97,38 +100,6 @@ changed between base and head (the rest are unchanged and uninteresting):
 python3 -m probe.verify --base main --modules mypkg --changed-only -- pytest -q
 ```
 
-### Inputs from a real app, not just tests
-
-The capture command after `--` can be *anything* that runs your code — a script,
-an integration harness, or a server — so inputs aren't limited to your test
-suite:
-
-```bash
-# capture real call arguments from an actual app run
-probe capture --modules mypkg --out caps.pkl -- python -m myapp run-some-workload
-probe replay /path/to/repo main HEAD caps.pkl
-```
-
-For a long-running process (a server you exercise by hand), the hook flushes
-captures every few seconds (`PROBE_CAPTURE_FLUSH_SECS`), so an abrupt SIGTERM/
-SIGKILL still leaves a usable capture file.
-
-You can also snapshot a running, hook-enabled process **on demand without
-stopping it**:
-
-```bash
-# start the process under capture with a known dump directory
-probe capture --modules mypkg --capture-dir ./caps --out caps.pkl -- python -m myapp serve
-# ...later, in another shell, dump its current captures (process keeps running):
-probe attach <pid> --capture-dir ./caps      # writes caps/cap-<pid>.pkl
-```
-
-`probe attach` sends the hook's flush signal (default SIGUSR1, override with
-`PROBE_CAPTURE_FLUSH_SIGNAL`). This works only for processes started under the
-hook — it does **not** inject into an arbitrary unmodified process (that needs
-ptrace/gdb and is heavily restricted, especially on macOS under SIP; see
-`experiments/FINDINGS.md` §9).
-
 Capture and replay are also available separately (`probe.capture --modules M
 --out caps.pkl -- <test cmd>` then `probe.replay <repo> <base> <head> caps.pkl`).
 
@@ -191,7 +162,6 @@ run_probe.py                         entry point for the corpus demo (fixes hash
 probe/verify.py                      CLI: one-command verify via the repo's tests
 probe/check.py                       CLI: check a real refactor (two files or git refs)
 probe/capture.py                     CLI: capture real call args from any test command
-probe/attach.py                      CLI: on-demand flush of a running hook-enabled process
 probe/_capture_hook.py               capture hook injected into spawned processes
 probe/replay.py                      CLI: replay captured args across two refs (worktrees)
 probe/canonical.py                   JSON canonical value form (cross-process compare)
