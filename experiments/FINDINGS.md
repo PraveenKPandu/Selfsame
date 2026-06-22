@@ -442,3 +442,36 @@ Proof — each refinement isolated against one-shot:
 Suite 75 -> 78 tests (token mining, bad-syntax fallback, token injection). Still
 sound. Possible further work: branch-edge *hashing* (AFL's bucketed hit counts),
 splice/crossover between corpus entries, and structural mutation of containers.
+
+## 16. Fuzzer refinements II: bucketing, crossover, structural mutation
+
+The three §15 follow-ups. Each is isolated with an A/B: the same guided fuzzer
+with the one capability turned off, so the win is attributable, not incidental.
+
+1. **AFL hit-count bucketing** (`_cgfuzz_worker.py`): count how many times each
+   edge fires per run, bucket it (1,2,3,4-7,8-15,16-31,32-127,128+), and key
+   coverage on `(edge, bucket)`. "Took this loop 8 times" is now distinct from
+   "twice", so loop-depth-diverse inputs are retained.
+
+2. **Splice/crossover** (`_mutate.py` `_crossover`): combine two energy-weighted
+   parents — per position take one's value or the other's, splicing prefix+suffix
+   for str/bytes. Merges a feature from one input with a feature from another.
+
+3. **Structural container mutation** (`_mutate.py`): lists gain insert-at-position,
+   subrange duplication, swap, reverse; dicts gain key add/del and value swap
+   (was single-element mutate/del/append only).
+
+Proof — each capability vs the same fuzzer with it disabled:
+
+| fixture (bug location)                         | capability OFF | capability ON |
+|------------------------------------------------|----------------|---------------|
+| bug at exactly 7 loop iterations               | 0 (cov 8->8)   | found (cov 11->35) |
+| `a.count("A")>=8 AND b.count("B")>=8`, split seeds | 0          | found `('AAAAAAAA','xBBBBBBBB')` |
+| "mirror" list (first half == second half)      | 0              | found `([3,4,5,3,4,5],)` |
+
+All three "OFF" columns are the full guided fuzzer (edge coverage + output
+diversity + energy + dictionary) minus only the named capability — so each row
+isolates exactly one refinement. One-shot finds 0 on all three. Suite 78 -> 84.
+Still sound. Diminishing returns from here; the engine now covers the standard
+greybox-fuzzer toolkit (coverage feedback, hit-count buckets, dictionary,
+crossover, structural mutation, energy scheduling).
