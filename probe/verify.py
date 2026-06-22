@@ -24,6 +24,7 @@ import subprocess
 import sys
 
 from .capture import capture_command
+from .extract import changed_keys
 from .replay import _add_worktree, _rm_worktree, replay_paths
 
 
@@ -82,6 +83,8 @@ def main(argv=None) -> int:
                     help="comma-separated module/package names to verify")
     ap.add_argument("--python", default=None,
                     help="interpreter to run tests + replay workers under")
+    ap.add_argument("--changed-only", action="store_true",
+                    help="only check functions that changed between base and head")
     ns = ap.parse_args(raw[:split])
 
     repo = os.path.abspath(ns.repo)
@@ -111,7 +114,17 @@ def main(argv=None) -> int:
         print(msg)
         return 2
     total = sum(len(v) for v in records.values())
-    print("captured %d arg-sets across %d functions\n" % (total, len(records)))
+    print("captured %d arg-sets across %d functions" % (total, len(records)))
+
+    if ns.changed_only:
+        changed = changed_keys(repo, ns.base, ns.head)
+        records = {k: v for k, v in records.items() if k in changed}
+        print("diff %s..%s touches %d functions; %d of them have captured inputs"
+              % (ns.base, ns.head, len(changed), len(records)))
+        if not records:
+            print("\nNo changed-and-tested functions to check — nothing to verify.")
+            return 0
+    print("")
 
     base_path = _add_worktree(repo, ns.base)
     head_path = repo if ns.head == "WORKTREE" else _add_worktree(repo, ns.head)

@@ -8,6 +8,7 @@ changed signature is reported separately rather than guessed at.
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -95,6 +96,80 @@ def io_capability(src: str, name: str):
                         return "calls .%s()" % f.attr
             return None
     return None
+
+
+def _path_to_module(path: str) -> str:
+    p = path
+    if p.startswith("src/"):
+        p = p[4:]
+    if p.endswith("/__init__.py"):
+        p = p[: -len("/__init__.py")]
+    elif p.endswith(".py"):
+        p = p[:-3]
+    return p.replace("/", ".")
+
+
+def _func_segments(src: str):
+    """{qualname: source} for top-level functions AND methods (Class.method)."""
+    out = {}
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return out
+
+    def visit(node, prefix):
+        for child in getattr(node, "body", []):
+            if isinstance(child, ast.FunctionDef):
+                seg = ast.get_source_segment(src, child)
+                out[prefix + child.name] = seg if seg is not None else ast.dump(child)
+            elif isinstance(child, ast.ClassDef):
+                visit(child, prefix + child.name + ".")
+
+    visit(tree, "")
+    return out
+
+
+def changed_keys(repo: str, base: str, head: str):
+    """Set of 'module::qualname' for functions/methods whose body changed between
+    base and head (head == 'WORKTREE' compares against the working tree)."""
+    if head == "WORKTREE":
+        diff = ["diff", "--name-only", base, "--", "*.py"]
+    else:
+        diff = ["diff", "--name-only", base, head, "--", "*.py"]
+    try:
+        files = subprocess.check_output(["git", "-C", repo] + diff, text=True).split()
+    except subprocess.CalledProcessError:
+        return set()
+
+    keys = set()
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        try:
+            base_src = subprocess.check_output(
+                ["git", "-C", repo, "show", "%s:%s" % (base, f)],
+                text=True, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            base_src = ""
+        if head == "WORKTREE":
+            try:
+                with open(os.path.join(repo, f)) as fh:
+                    head_src = fh.read()
+            except OSError:
+                head_src = ""
+        else:
+            try:
+                head_src = subprocess.check_output(
+                    ["git", "-C", repo, "show", "%s:%s" % (head, f)],
+                    text=True, stderr=subprocess.DEVNULL)
+            except subprocess.CalledProcessError:
+                head_src = ""
+        base_segs, head_segs = _func_segments(base_src), _func_segments(head_src)
+        mod = _path_to_module(f)
+        for qn in set(base_segs) | set(head_segs):
+            if base_segs.get(qn) != head_segs.get(qn):
+                keys.add(mod + "::" + qn)
+    return keys
 
 
 def build_function(src: str, name: str):

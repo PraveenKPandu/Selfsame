@@ -79,6 +79,13 @@ python3 -m probe.verify --base main --modules cachetools \
 Per-function replay runs in parallel; a function whose replay exceeds
 `PROBE_WORKER_TIMEOUT` is reported `timeout` (not-comparable), never a false pass.
 
+For CI on a PR, add `--changed-only` to check just the functions whose body
+changed between base and head (the rest are unchanged and uninteresting):
+
+```bash
+python3 -m probe.verify --base main --modules mypkg --changed-only -- pytest -q
+```
+
 Capture and replay are also available separately (`probe.capture --modules M
 --out caps.pkl -- <test cmd>` then `probe.replay <repo> <base> <head> caps.pkl`).
 
