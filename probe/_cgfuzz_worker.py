@@ -3,10 +3,11 @@
 Runs in the head worktree. Starting from captured seeds, it repeatedly: pick a
 corpus input (energy-weighted — fresh/smaller inputs preferred), havoc-mutate it
 (probe._mutate.mutate_one), run the function while
-tracing which branch EDGES (prev_line -> cur_line) of the target module execute,
-and — if the run hit a *new* edge — keep the mutated input in the corpus. Edge
-coverage drills through nested branches that blind one-shot mutation can't reach.
-Deterministic (seeded RNG).
+tracing which branch EDGES (prev_line -> cur_line) of the target module execute
+and how many times (AFL hit-count bucketing), and — if the run hit a *new* edge
+or hit-count bucket — keep the mutated input in the corpus. Edge coverage drills
+through nested branches that blind one-shot mutation can't reach; bucketing
+retains loop-depth-diverse inputs. Deterministic (seeded RNG).
 
 It only *explores* (head version, for coverage) and emits an enriched input
 corpus; the sound base-vs-head differential comparison happens later in fuzz.py.
@@ -24,6 +25,23 @@ import os
 import pickle
 import random
 import sys
+
+
+def _bucket(n):
+    """AFL hit-count buckets: 1, 2, 3, 4-7, 8-15, 16-31, 32-127, 128+.
+    Coverage key is (edge, bucket(count)) so taking a loop more times counts as
+    new coverage — retains loop-depth-diverse inputs."""
+    if n <= 3:
+        return n
+    if n <= 7:
+        return 4
+    if n <= 15:
+        return 8
+    if n <= 31:
+        return 16
+    if n <= 127:
+        return 32
+    return 128
 
 
 def main() -> int:
@@ -74,8 +92,8 @@ def main() -> int:
         seen = set()
 
         def trace_run(values):
-            cov = set()
-            last = [None]   # previous line in the target file (for edge coverage)
+            hits = {}       # edge (prev_line, cur_line) -> times fired this run
+            last = [None]   # previous line in the target file
 
             def gtr(frame, event, arg):
                 if event == "call" and frame.f_code.co_filename == target_file:
@@ -84,10 +102,11 @@ def main() -> int:
 
             def ltr(frame, event, arg):
                 if event == "line":
-                    # branch-EDGE coverage: (prev_line -> cur_line). Finer than
-                    # line coverage — distinguishes different control-flow paths
-                    # through the same set of lines.
-                    cov.add((last[0], frame.f_lineno))
+                    # branch-EDGE coverage with AFL hit-count bucketing: count how
+                    # many times each (prev_line -> cur_line) edge fires; the
+                    # bucketed count joins the coverage key below.
+                    edge = (last[0], frame.f_lineno)
+                    hits[edge] = hits.get(edge, 0) + 1
                     last[0] = frame.f_lineno
                 return ltr
 
@@ -108,6 +127,7 @@ def main() -> int:
                 outcome = "exc:" + type(e).__name__
             finally:
                 sys.settrace(None)
+            cov = {(edge, _bucket(c)) for edge, c in hits.items()}
             return cov, outcome
 
         def add(values, origin):
@@ -147,9 +167,9 @@ def main() -> int:
             base_values = pick()
             mutated = mutate_one(base_values, rng, alphabet, tokens)
             cov, outcome = trace_run(mutated)
-            # Keep an input that reaches a new EDGE (branchy code) OR produces a
-            # new OUTPUT (data-driven code where control flow stays flat but
-            # behavior varies) — robust across both styles.
+            # Keep an input that reaches a new EDGE/bucket (branchy or loopy code)
+            # OR produces a new OUTPUT (data-driven code where control flow stays
+            # flat but behavior varies) — robust across both styles.
             if (cov - covered) or (outcome not in seen_outcomes):
                 covered |= cov
                 seen_outcomes.add(outcome)

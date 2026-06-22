@@ -848,6 +848,23 @@ class TestMutation(unittest.TestCase):
         self.assertIn("deploy", produced)
 
 
+class TestBucketing(unittest.TestCase):
+    def test_bucket_boundaries(self):
+        from probe._cgfuzz_worker import _bucket
+        self.assertEqual([_bucket(n) for n in (1, 2, 3)], [1, 2, 3])
+        self.assertEqual([_bucket(n) for n in (4, 7)], [4, 4])
+        self.assertEqual([_bucket(n) for n in (8, 15)], [8, 8])
+        self.assertEqual([_bucket(n) for n in (16, 31)], [16, 16])
+        self.assertEqual([_bucket(n) for n in (32, 127)], [32, 32])
+        self.assertEqual([_bucket(n) for n in (128, 5000)], [128, 128])
+
+    def test_bucket_distinguishes_loop_depth(self):
+        # same edge, different hit counts -> different coverage keys
+        from probe._cgfuzz_worker import _bucket
+        edge = (10, 11)
+        self.assertNotEqual((edge, _bucket(2)), (edge, _bucket(5)))
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
