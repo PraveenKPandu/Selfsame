@@ -134,6 +134,10 @@ python3 -m probe.verify --base main --modules cachetools \
 
 Per-function replay runs in parallel; a function whose replay exceeds
 `PROBE_WORKER_TIMEOUT` is reported `timeout` (not-comparable), never a false pass.
+The summary separates `verified` (equivalent/divergent/unverifiable) from
+`not verified` (skipped/error/timeout), so a busy machine's timeouts never look
+like divergences. Exit codes: **0** none diverged · **1** a divergence ·
+**2** usage · **3** with `--strict`, some function couldn't be verified.
 
 For CI on a PR, add `--changed-only` to check just the functions whose body
 changed between base and head (the rest are unchanged and uninteresting):
@@ -141,6 +145,21 @@ changed between base and head (the rest are unchanged and uninteresting):
 ```bash
 python3 -m probe.verify --base main --modules mypkg --changed-only -- pytest -q
 ```
+
+### Real-world notes
+
+- **Dynamically-versioned packages** (setuptools-scm / hatch-vcs, where
+  `_version.py` is generated and git-ignored): the base version is checked out as
+  a clean `git worktree`, which lacks generated files. Selfsame auto-copies
+  git-ignored source files under your package dir into the worktree so it still
+  imports; if a `ModuleNotFoundError` persists, build/generate the file first.
+- **Heavy suites:** capture is bounded by `PROBE_CAPTURE_TIMEOUT` (default 300s)
+  and `pytest-benchmark` is auto-disabled during capture (its timing loops blow
+  up under the hook; keep it with `PROBE_KEEP_BENCHMARK=1`). Property-based
+  (hypothesis) suites generate large call volumes — prefer `--changed-only`.
+- **Coverage = test coverage:** Selfsame only checks the inputs your tests
+  actually exercise. A change on a branch no test reaches is reported
+  `equivalent` (true for those inputs) — it verifies, it doesn't prove.
 
 ### Inputs from a real app, not just tests
 
