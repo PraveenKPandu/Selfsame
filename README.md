@@ -52,6 +52,18 @@ the current code and reports each deviation (with base-vs-head witness and
 measures *deviation*, not correctness — and only over the inputs your tests
 exercised (the report names changed functions that have no test coverage).
 
+Or let it run automatically with your tests via the **pytest plugin** (compare-only
+— it never re-baselines; bless a new baseline explicitly with `selfsame snapshot`):
+
+```ini
+# pytest.ini / pyproject [tool.pytest.ini_options]
+[pytest]
+selfsame = true        # or pass --selfsame on the command line
+```
+On any drift it prints the report and fails the session (`--selfsame-no-fail` to
+report only). So `pytest` itself becomes your regression gate against the accepted
+build.
+
 The output scales with **tested behavioral surface that actually changed**, not
 lines of code: new code has no baseline (0 flags), behavior-preserving rewrites
 stay `equivalent`, and only real deviations at tested inputs are flagged. At high

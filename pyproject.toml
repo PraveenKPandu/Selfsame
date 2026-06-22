@@ -25,6 +25,9 @@ Homepage = "https://github.com/PraveenKPandu/Selfsame"
 selfsame = "probe.cli:main"
 probe = "probe.cli:main"
 
+[project.entry-points.pytest11]
+selfsame = "probe.pytest_plugin"
+
 [tool.setuptools]
 packages = ["probe", "units"]
 
