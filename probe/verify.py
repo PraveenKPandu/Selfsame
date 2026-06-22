@@ -126,8 +126,9 @@ def main(argv=None) -> int:
             return 0
     print("")
 
-    base_path = _add_worktree(repo, ns.base)
-    head_path = repo if ns.head == "WORKTREE" else _add_worktree(repo, ns.head)
+    base_path = _add_worktree(repo, ns.base, modules)
+    head_path = (repo if ns.head == "WORKTREE"
+                 else _add_worktree(repo, ns.head, modules))
     try:
         label = "%s..%s" % (ns.base, ns.head)
         return replay_paths(base_path, head_path, records, label, python_exe)

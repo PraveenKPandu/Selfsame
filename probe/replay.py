@@ -94,9 +94,69 @@ def _same(a: Dict, b: Dict) -> bool:
     return a.get("self_after") == b.get("self_after")  # method mutation is behavior
 
 
-def _add_worktree(repo, ref) -> str:
+# Safe file types / locations to carry into a fresh worktree (see
+# _copy_generated_sources). Deliberately narrow: source-ish files only, never
+# build output or caches.
+_PREP_OK_EXT = (".py", ".pyi", ".txt", ".json", ".cfg", ".ini")
+_PREP_SKIP = ("/__pycache__/", ".egg-info/", "/build/", "/dist/", "/.tox/")
+
+
+def _pkg_dirs(repo, modules):
+    """Repo-relative directories that hold the target packages' source."""
+    dirs = []
+    for m in modules:
+        top = str(m).split(".")[0]
+        for cand in (top, os.path.join("src", top)):
+            if os.path.isdir(os.path.join(repo, cand)):
+                dirs.append(cand)
+    return dirs
+
+
+def _copy_generated_sources(repo, wt, modules):
+    """Copy build-generated, git-IGNORED source files (e.g. setuptools-scm /
+    hatch-vcs `_version.py`) from the live working tree into a fresh worktree, so
+    a dynamically-versioned package can still import during replay.
+
+    A plain `git worktree add` only materializes tracked files, so an ignored
+    generated module is missing on the base side and every function errors with
+    `ModuleNotFoundError`. Scoped to the target package dirs and safe file types;
+    skips caches/build output. Returns the list of copied repo-relative paths."""
+    dirs = _pkg_dirs(repo, modules)
+    if not dirs:
+        return []
+    try:
+        out = _git(repo, "ls-files", "--others", "--ignored",
+                   "--exclude-standard", "--", *dirs)
+    except Exception:
+        return []
+    copied = []
+    for rel in out.splitlines():
+        rel = rel.strip()
+        if not rel or not rel.endswith(_PREP_OK_EXT):
+            continue
+        if any(s in ("/" + rel) for s in _PREP_SKIP):
+            continue
+        src = os.path.join(repo, rel)
+        dst = os.path.join(wt, rel)
+        if os.path.isfile(src) and not os.path.exists(dst):
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                copied.append(rel)
+            except Exception:
+                continue
+    return copied
+
+
+def _add_worktree(repo, ref, modules=()) -> str:
     wt = tempfile.mkdtemp(prefix="probe_wt_")
     _git(repo, "worktree", "add", "--detach", wt, ref)
+    if modules:
+        copied = _copy_generated_sources(repo, wt, modules)
+        if copied:
+            shown = ", ".join(copied[:3]) + ("..." if len(copied) > 3 else "")
+            print("  prepared worktree (%s): copied %d git-ignored generated "
+                  "file(s): %s" % (ref, len(copied), shown))
     return wt
 
 
@@ -151,6 +211,15 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     for name, n, verdict, note in rows:
         print("  %-30s n=%-4d %-13s %s" % (name, n, verdict, note))
 
+    gen_err = sum(1 for _n, _c, v, t in rows
+                  if v == "error" and "No module named" in (t or ""))
+    if gen_err:
+        print("\nNote: %d function(s) errored with a missing module. A version "
+              "ref's worktree may lack a build-generated file that isn't in git "
+              "(e.g. setuptools-scm/hatch-vcs _version.py). probe auto-copies "
+              "git-ignored files under the package dir; if this persists, "
+              "generate/build it in your working tree first." % gen_err)
+
     checked = sum(1 for _n, _c, v, _t in rows
                   if v in ("equivalent", "divergent", "unverifiable"))
     verifiable = tally.get("equivalent", 0) + tally.get("divergent", 0)
@@ -171,8 +240,9 @@ def replay(repo: str, base: str, head: str, capture_path: str,
     with open(capture_path, "rb") as f:
         cap = pickle.load(f)
     records: Dict[str, List[bytes]] = cap["records"]
-    base_wt = _add_worktree(repo, base)
-    head_wt = repo if head == "WORKTREE" else _add_worktree(repo, head)
+    modules = sorted({_split_key(k)[0] for k in records})
+    base_wt = _add_worktree(repo, base, modules)
+    head_wt = repo if head == "WORKTREE" else _add_worktree(repo, head, modules)
     try:
         return replay_paths(base_wt, head_wt, records, "%s..%s" % (base, head),
                             python_exe)
