@@ -1167,6 +1167,99 @@ class TestDriftHandling(unittest.TestCase):
         self.assertEqual(idx, 0)
 
 
+class TestLeafValueTypes(unittest.TestCase):
+    def _opaque(self, v):
+        from probe.canonical import canonical
+        return "opaque" in repr(canonical(v))
+
+    def test_common_value_types_are_no_longer_opaque(self):
+        import datetime
+        import decimal
+        import fractions
+        import pathlib
+        import re
+        for v in [datetime.datetime(2020, 1, 1, 12, 0),
+                  datetime.date(2020, 1, 1),
+                  datetime.time(12, 0),
+                  datetime.timedelta(days=1),
+                  datetime.timezone.utc,
+                  decimal.Decimal("9.99"),
+                  1 + 2j,
+                  fractions.Fraction(1, 3),
+                  pathlib.Path("/tmp/x"),
+                  re.match("a(b)", "ab"),
+                  re.compile("a"),
+                  NotImplemented]:
+            self.assertFalse(self._opaque(v), "%r still opaque" % (v,))
+
+    def test_observable_equality_no_false_divergence_or_equivalence(self):
+        import datetime
+        import decimal
+
+        from probe.canonical import canonical
+        d1 = datetime.datetime(2020, 1, 1, 12, 0)
+        d2 = datetime.datetime(2020, 1, 1, 12, 0)
+        d3 = datetime.datetime(2020, 1, 1, 12, 1)
+        self.assertEqual(canonical(d1), canonical(d2))      # identical -> equal
+        self.assertNotEqual(canonical(d1), canonical(d3))   # different -> differ
+        # naive vs aware are observationally different -> must not collide
+        aware = datetime.datetime(2020, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
+        self.assertNotEqual(canonical(d1), canonical(aware))
+        self.assertEqual(canonical(decimal.Decimal("9.99")),
+                         canonical(decimal.Decimal("9.99")))
+        self.assertNotEqual(canonical(decimal.Decimal("9.99")),
+                            canonical(decimal.Decimal("9.98")))
+
+    def test_nan_handling(self):
+        import decimal
+
+        from probe.canonical import canonical
+        # two NaNs canonicalize equal (consistent with float handling)
+        self.assertEqual(canonical(decimal.Decimal("nan")),
+                         canonical(decimal.Decimal("nan")))
+        self.assertEqual(canonical(complex(float("nan"), 0)),
+                         canonical(complex(float("nan"), 0)))
+
+    def test_cascade_objects_and_containers(self):
+        import datetime
+
+        from probe.canonical import canonical
+        # an object/dict/list holding a leaf value is now comparable (was opaque)
+        self.assertFalse("opaque" in repr(
+            canonical({"t": datetime.datetime(2020, 1, 1)})))
+        self.assertFalse("opaque" in repr(
+            canonical([datetime.datetime(2020, 1, 1)])))
+        same = canonical({"t": datetime.datetime(2020, 1, 1)})
+        diff = canonical({"t": datetime.datetime(2020, 1, 2)})
+        self.assertNotEqual(same, diff)
+        self.assertEqual(same, canonical({"t": datetime.datetime(2020, 1, 1)}))
+
+    def test_pathological_tzinfo_falls_back_not_crashes(self):
+        import datetime
+
+        from probe.canonical import canonical
+
+        class BadTz(datetime.tzinfo):
+            def utcoffset(self, dt):
+                raise ValueError("boom")
+
+            def tzname(self, dt):
+                raise ValueError("boom")
+
+        # a datetime whose tzinfo raises must not crash canonical(); it falls
+        # through to the existing handling (never breaks a run).
+        out = canonical(datetime.datetime(2020, 1, 1, tzinfo=BadTz()))
+        self.assertIsInstance(out, list)
+
+    def test_truly_opaque_still_refused(self):
+        from probe.canonical import canonical
+
+        class Opaque:
+            __slots__ = ()           # no introspectable state, no safe view
+
+        self.assertTrue("opaque" in repr(canonical(Opaque())))
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)

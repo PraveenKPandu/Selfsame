@@ -673,3 +673,45 @@ deterministically. Suite 110 -> 112.
 What's left of the original AI-fit list: only N-way generation diff, deliberately
 deferred (creation-time, heuristic/non-sound, 3x generation cost — doesn't serve
 the protect-the-baseline mission).
+
+## 23. Leaf value-type canonicalization (the big coverage lever)
+
+The arrow challenge run (§ challenge) scored only 45% sound auto-verify, and the
+refusal histogram showed why: 69 of 70 `unverifiable` were `opaque-return` (35) +
+`opaque-state` (34) — because `canonical.py` had no comparable form for
+`datetime`, so anything returning/holding an `Arrow` (which wraps a `datetime`)
+read as opaque. The same gap hit any value type without a `__dict__`: `Decimal`,
+`complex`, `pathlib.Path`, `re.Match`/`Pattern`, and — via the cascade — every
+object/dict/list/dataclass *containing* one (`{"price": Decimal, "created": datetime}`
+was opaque as a whole).
+
+Fix (`probe/canonical.py`, `_leaf_value`): a registry of sound canonical forms for
+common stdlib leaf types — datetime/date/time/timedelta/tzinfo, Decimal, complex,
+Fraction, Path, re.Match/Pattern, NotImplemented/Ellipsis — each by its
+**observable form** (datetime → isoformat + fold + tzname; Decimal → exact str;
+etc.). Two values canonicalize equal iff observationally indistinguishable, so it
+adds coverage without weakening soundness: no false equivalence (different
+observable → different form) and no false divergence (identical observable →
+identical form). Guarded so a pathological tzinfo falls back instead of crashing.
+Because `canonical` recurses, fixing the leaves fixes the cascade automatically.
+
+Impact on arrow (HEAD~90..WORKTREE, same run as before):
+
+| | before | after |
+|---|---|---|
+| sound auto-verify | 45% (57/127) | **90% (114/127)** |
+| equivalent | 42 | 94 |
+| divergent (real changes caught) | 15 | **20** |
+| unverifiable | 70 | **13** |
+
+The 13 remaining refusals are all legitimate (7 uncontrolled-io — `Arrow.now`/
+`utcnow` read the clock; 5 nondeterministic; 1 opaque-state). The 5 extra
+divergences are real behavior changes that were previously hidden behind opaque
+(e.g. `humanize` rounding `'20 seconds ago'`→`'21 seconds ago'`; `parse_iso`
+attaching a `'UTC'`-named tz where it returned an unnamed one). Generalizes far
+beyond arrow: any codebase using money (`Decimal`), ids (`UUID`/already handled),
+dates, paths, or regex results. Suite 112 -> 118.
+
+(Scope note: this lifts the OPAQUE bucket. The other refusal causes —
+uncontrolled-io, nondeterminism, threads, cross-version pickle errors, and
+coverage==test-coverage — are separate levers and mostly *should* stay refused.)
