@@ -30,17 +30,18 @@ from .replay import _add_worktree, _repo_root, _rm_worktree, _same, _split_key, 
 _FUZZ_TIMEOUT = 90
 
 
-def _fuzz_inputs(worktree, module, qualname, seed_blobs, budget, python_exe=None):
+def _fuzz_inputs(worktree, module, qualname, seed_blobs, budget,
+                python_exe=None, worker="probe._fuzz_worker", cap=200):
     env = dict(os.environ)
     env["PYTHONHASHSEED"] = "0"
     env["PYTHONPATH"] = _repo_root() + os.pathsep + env.get("PYTHONPATH", "")
     job = json.dumps({
         "worktree": worktree, "module_name": module, "qualname": qualname,
         "seeds_b64": [base64.b64encode(b).decode("ascii") for b in seed_blobs],
-        "budget": budget,
+        "budget": budget, "cap": cap,
     })
     try:
-        proc = subprocess.run([python_exe or sys.executable, "-m", "probe._fuzz_worker"],
+        proc = subprocess.run([python_exe or sys.executable, "-m", worker],
                               input=job, capture_output=True, text=True,
                               timeout=_FUZZ_TIMEOUT, env=env, cwd=_repo_root())
     except subprocess.TimeoutExpired:
@@ -50,17 +51,26 @@ def _fuzz_inputs(worktree, module, qualname, seed_blobs, budget, python_exe=None
     return json.loads(proc.stdout)
 
 
-def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None):
-    print("Capture-seeded differential fuzz: %s  (%d functions)" % (label, len(records)))
+def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None,
+               guided=True):
+    worker = "probe._cgfuzz_worker" if guided else "probe._fuzz_worker"
+    cg_budget = 6000 if guided else budget
+    print("Capture-seeded differential fuzz: %s  (%d functions, %s)"
+          % (label, len(records), "coverage-guided" if guided else "one-shot"))
     print("=" * 74)
     seed_div_total = fuzz_div_total = skipped_total = checked = funcs_fuzz_only = 0
+    cov_seed_total = cov_total_total = 0
     rows = []
 
     for key in sorted(records):
         module, qual = _split_key(key)
-        fi = _fuzz_inputs(head_path, module, qual, records[key], budget, python_exe)
+        fi = _fuzz_inputs(head_path, module, qual, records[key], cg_budget,
+                          python_exe, worker=worker, cap=budget)
         if not fi or fi.get("error") or not fi.get("inputs"):
             continue
+        cov = fi.get("coverage") or {}
+        cov_seed_total += cov.get("seed_lines", 0)
+        cov_total_total += cov.get("total_lines", 0)
         inputs = fi["inputs"]
         blobs = [base64.b64decode(i["b64"]) for i in inputs]
         b = _worker(base_path, module, qual, blobs, python_exe)
@@ -104,6 +114,9 @@ def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None
 
     print("\n" + "-" * 74)
     print("Functions fuzzed                       : %d" % checked)
+    if guided:
+        print("Coverage (target lines hit)            : %d at seeds -> %d after "
+              "fuzzing" % (cov_seed_total, cov_total_total))
     print("Divergences at TEST inputs (seeds)     : %d" % seed_div_total)
     print("Divergences found ONLY by fuzzing      : %d  (in %d functions whose "
           "seeds all agreed)" % (fuzz_div_total, funcs_fuzz_only))
@@ -111,7 +124,7 @@ def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None
     return 1 if (seed_div_total or fuzz_div_total) else 0
 
 
-def fuzz(repo, base, head, capture_path, budget=200, python_exe=None):
+def fuzz(repo, base, head, capture_path, budget=200, python_exe=None, guided=True):
     with open(capture_path, "rb") as f:
         cap = pickle.load(f)
     records = cap["records"]
@@ -119,7 +132,7 @@ def fuzz(repo, base, head, capture_path, budget=200, python_exe=None):
     head_wt = repo if head == "WORKTREE" else _add_worktree(repo, head)
     try:
         return fuzz_paths(base_wt, head_wt, records, "%s..%s" % (base, head),
-                          budget, python_exe)
+                          budget, python_exe, guided)
     finally:
         _rm_worktree(repo, base_wt)
         if head_wt != repo:
@@ -128,12 +141,14 @@ def fuzz(repo, base, head, capture_path, budget=200, python_exe=None):
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    guided = "--oneshot" not in argv      # coverage-guided by default
+    argv = [a for a in argv if a not in ("--oneshot", "--guided")]
     if len(argv) < 4:
         print(__doc__)
         return 2
     repo, base, head, cap = argv[:4]
     budget = int(argv[4]) if len(argv) > 4 else 200
-    return fuzz(repo, base, head, cap, budget)
+    return fuzz(repo, base, head, cap, budget, guided=guided)
 
 
 if __name__ == "__main__":
