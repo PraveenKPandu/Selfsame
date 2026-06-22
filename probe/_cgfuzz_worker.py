@@ -2,16 +2,17 @@
 
 Runs in the head worktree. Starting from captured seeds, it repeatedly: pick a
 corpus input, havoc-mutate it (probe._mutate.mutate_one), run the function while
-tracing which lines of the target module execute, and — if the run hit *new*
-lines — keep the mutated input in the corpus. This drills through nested branches
-that blind one-shot mutation can't reach. Deterministic (seeded RNG).
+tracing which branch EDGES (prev_line -> cur_line) of the target module execute,
+and — if the run hit a *new* edge — keep the mutated input in the corpus. Edge
+coverage drills through nested branches that blind one-shot mutation can't reach.
+Deterministic (seeded RNG).
 
 It only *explores* (head version, for coverage) and emits an enriched input
 corpus; the sound base-vs-head differential comparison happens later in fuzz.py.
 
 stdin  JSON: {worktree, module_name, qualname, seeds_b64, budget, cap}
-stdout JSON: {error, inputs: [{origin, b64, repr}], coverage: {seed_lines,
-              total_lines, execs, corpus}}
+stdout JSON: {error, inputs: [{origin, b64, repr}], coverage: {seed, total,
+              execs, corpus}}
 """
 
 import base64
@@ -65,6 +66,7 @@ def main() -> int:
 
         def trace_run(values):
             cov = set()
+            last = [None]   # previous line in the target file (for edge coverage)
 
             def gtr(frame, event, arg):
                 if event == "call" and frame.f_code.co_filename == target_file:
@@ -73,7 +75,11 @@ def main() -> int:
 
             def ltr(frame, event, arg):
                 if event == "line":
-                    cov.add(frame.f_lineno)
+                    # branch-EDGE coverage: (prev_line -> cur_line). Finer than
+                    # line coverage — distinguishes different control-flow paths
+                    # through the same set of lines.
+                    cov.add((last[0], frame.f_lineno))
+                    last[0] = frame.f_lineno
                 return ltr
 
             call = list(values[1:]) if bound_classmethod else list(values)
@@ -112,7 +118,7 @@ def main() -> int:
                 cov, outcome = trace_run(s)
                 covered |= cov
                 seen_outcomes.add(outcome)
-        seed_lines = len(covered)
+        seed_edges = len(covered)
 
         execs = 0
         n_fuzz = 0
@@ -121,9 +127,9 @@ def main() -> int:
             base_values = rng.choice(corpus)[0]
             mutated = mutate_one(base_values, rng, alphabet)
             cov, outcome = trace_run(mutated)
-            # Keep an input that reaches a new LINE (branchy code) OR produces a
-            # new OUTPUT (data-driven code where lines stay flat but behavior
-            # varies) — robust across both styles.
+            # Keep an input that reaches a new EDGE (branchy code) OR produces a
+            # new OUTPUT (data-driven code where control flow stays flat but
+            # behavior varies) — robust across both styles.
             if (cov - covered) or (outcome not in seen_outcomes):
                 covered |= cov
                 seen_outcomes.add(outcome)
@@ -140,7 +146,7 @@ def main() -> int:
             out["inputs"].append({"origin": origin,
                                   "b64": base64.b64encode(blob).decode("ascii"),
                                   "repr": rep})
-        out["coverage"] = {"seed_lines": seed_lines, "total_lines": len(covered),
+        out["coverage"] = {"seed": seed_edges, "total": len(covered),
                            "execs": execs, "corpus": len(corpus)}
     except Exception as e:
         out["error"] = "%s: %s" % (type(e).__name__, e)
