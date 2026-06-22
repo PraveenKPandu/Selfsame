@@ -1,0 +1,11 @@
+[package]
+name = "selfsame"
+version = "0.0.1"
+edition = "2021"
+description = "Reserved name for the Selfsame project."
+license = "MIT"
+repository = "https://github.com/PraveenKPandu/Selfsame"
+homepage = "https://github.com/PraveenKPandu/Selfsame"
+
+[lib]
+path = "src/lib.rs"
