@@ -66,6 +66,19 @@ It captures inputs while the tests run, replays both versions, prints a
 per-function/method verdict, and exits non-zero if any divergence is caught
 (drop it in CI). `--head` defaults to your current working tree.
 
+Because the probe **runs the target's code and tests**, it must use a Python the
+target supports. Pass `--python /path/to/pythonX.Y` to run the tests and replay
+workers under that interpreter; the repo's `requires-python` is checked and a
+mismatch is reported loudly instead of silently capturing nothing:
+
+```bash
+python3 -m probe.verify --base main --modules cachetools \
+        --python /path/to/py310/bin/python -- python -m pytest -q
+```
+
+Per-function replay runs in parallel; a function whose replay exceeds
+`PROBE_WORKER_TIMEOUT` is reported `timeout` (not-comparable), never a false pass.
+
 Capture and replay are also available separately (`probe.capture --modules M
 --out caps.pkl -- <test cmd>` then `probe.replay <repo> <base> <head> caps.pkl`).
 

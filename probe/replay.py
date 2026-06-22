@@ -11,6 +11,7 @@ Run:  python3 -m probe.replay <repo> <base_ref> <head_ref> <capture.pkl>
 """
 
 import base64
+import concurrent.futures
 import json
 import os
 import pickle
@@ -19,6 +20,13 @@ import subprocess
 import sys
 import tempfile
 from typing import Dict, List, Optional
+
+# Replay every captured arg-set by default: capping the count silently drops the
+# inputs that trigger a divergence (a missed catch), and it doesn't rescue heavy
+# functions anyway (they hit the worker timeout regardless). Speed comes from
+# parallelism + the per-worker timeout. Users can opt into a cap for speed.
+_REPLAY_MAX_ARGS = int(os.environ.get("PROBE_REPLAY_MAX_ARGS", "100000"))
+_WORKER_TIMEOUT = int(os.environ.get("PROBE_WORKER_TIMEOUT", "45"))
 
 
 def _repo_root() -> str:
@@ -29,7 +37,7 @@ def _git(repo, *args):
     return subprocess.check_output(["git", "-C", repo] + list(args), text=True)
 
 
-def _worker(worktree, module_name, qualname, blobs) -> Dict:
+def _worker(worktree, module_name, qualname, blobs, python_exe=None) -> Dict:
     env = dict(os.environ)
     env["PYTHONHASHSEED"] = "0"
     env["PYTHONPATH"] = _repo_root() + os.pathsep + env.get("PYTHONPATH", "")
@@ -39,9 +47,9 @@ def _worker(worktree, module_name, qualname, blobs) -> Dict:
         "args_b64": [base64.b64encode(b).decode("ascii") for b in blobs],
     })
     try:
-        proc = subprocess.run([sys.executable, "-m", "probe._replay_worker"],
+        proc = subprocess.run([python_exe or sys.executable, "-m", "probe._replay_worker"],
                               input=job, capture_output=True, text=True,
-                              timeout=60, env=env, cwd=_repo_root())
+                              timeout=_WORKER_TIMEOUT, env=env, cwd=_repo_root())
     except subprocess.TimeoutExpired:
         return {"loaded": False, "error": "timeout", "obs": []}
     if proc.returncode != 0 or not proc.stdout.strip():
@@ -105,22 +113,37 @@ def _split_key(key: str):
     return key, key  # legacy/loose form
 
 
-def replay_paths(base_path: str, head_path: str,
-                 records: Dict[str, List[bytes]], label: str) -> int:
-    """Compare two already-materialized versions (directories on disk)."""
+def _check_key(base_path, head_path, key, blobs, python_exe):
+    module_name, qualname = _split_key(key)
+    blobs = blobs[:_REPLAY_MAX_ARGS]
+    b = _worker(base_path, module_name, qualname, blobs, python_exe)
+    h = _worker(head_path, module_name, qualname, blobs, python_exe)
+    verdict, note = _verdict(b, h, blobs)
+    return (qualname, len(blobs), verdict, note)
+
+
+def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
+                 label: str, python_exe: str = None) -> int:
+    """Compare two already-materialized versions (directories on disk).
+
+    Per-function checks run in parallel (each spawns two short-lived worker
+    subprocesses), and each function replays at most _REPLAY_MAX_ARGS inputs."""
     print("Replay: %s  (%d functions, real captured inputs)" % (label, len(records)))
     print("=" * 74)
 
-    tally: Dict[str, int] = {}
+    keys = sorted(records)
+    parallelism = min(8, (os.cpu_count() or 2))
     rows = []
-    for key in sorted(records):
-        module_name, qualname = _split_key(key)
-        blobs = records[key]
-        b = _worker(base_path, module_name, qualname, blobs)
-        h = _worker(head_path, module_name, qualname, blobs)
-        verdict, note = _verdict(b, h, blobs)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallelism) as ex:
+        futures = [ex.submit(_check_key, base_path, head_path, k, records[k], python_exe)
+                   for k in keys]
+        for fut in concurrent.futures.as_completed(futures):
+            rows.append(fut.result())
+    rows.sort(key=lambda r: r[0])
+
+    tally: Dict[str, int] = {}
+    for _name, _n, verdict, _note in rows:
         tally[verdict] = tally.get(verdict, 0) + 1
-        rows.append((qualname, len(blobs), verdict, note))
 
     for name, n, verdict, note in rows:
         print("  %-30s n=%-4d %-13s %s" % (name, n, verdict, note))
@@ -140,14 +163,16 @@ def replay_paths(base_path: str, head_path: str,
     return 1 if tally.get("divergent", 0) else 0
 
 
-def replay(repo: str, base: str, head: str, capture_path: str) -> int:
+def replay(repo: str, base: str, head: str, capture_path: str,
+           python_exe: str = None) -> int:
     with open(capture_path, "rb") as f:
         cap = pickle.load(f)
     records: Dict[str, List[bytes]] = cap["records"]
     base_wt = _add_worktree(repo, base)
     head_wt = _add_worktree(repo, head)
     try:
-        return replay_paths(base_wt, head_wt, records, "%s..%s" % (base, head))
+        return replay_paths(base_wt, head_wt, records, "%s..%s" % (base, head),
+                            python_exe)
     finally:
         _rm_worktree(repo, base_wt)
         _rm_worktree(repo, head_wt)

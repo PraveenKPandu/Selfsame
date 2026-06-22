@@ -378,5 +378,39 @@ class TestHardening(unittest.TestCase):
         self.assertIn("SystemExit", o.exception)
 
 
+class TestVersionSupport(unittest.TestCase):
+    def test_requires_python_from_pyproject(self):
+        import os
+        import tempfile
+
+        from probe.verify import _requires_python
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+            f.write('[project]\nname = "x"\nrequires-python = ">= 3.10"\n')
+        self.assertEqual(_requires_python(d), (3, 10))
+        self.assertIsNone(_requires_python(tempfile.mkdtemp()))  # nothing declared
+
+    def test_requires_python_from_setup_cfg(self):
+        import os
+        import tempfile
+
+        from probe.verify import _requires_python
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "setup.cfg"), "w") as f:
+            f.write("[options]\npython_requires = >=3.8\n")
+        self.assertEqual(_requires_python(d), (3, 8))
+
+    def test_py_version_of_self(self):
+        import sys
+
+        from probe.verify import _py_version
+        self.assertEqual(_py_version(sys.executable), tuple(sys.version_info[:2]))
+
+    def test_replay_arg_cap_is_read(self):
+        from probe import replay
+        self.assertIsInstance(replay._REPLAY_MAX_ARGS, int)
+        self.assertGreater(replay._REPLAY_MAX_ARGS, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,8 +25,10 @@ _MODULES = tuple(m for m in os.environ.get("PROBE_CAPTURE_MODULES", "").split(",
 _FUNCS = set(f for f in os.environ.get("PROBE_CAPTURE_FUNCS", "").split(",") if f)
 _CAP_PER_FUNC = 300
 # Safety valve: stop profiling after this many call events so a heavy suite
-# (stress/integration) can't make capture run unboundedly. We keep what we have.
-_MAX_EVENTS = int(os.environ.get("PROBE_CAPTURE_MAX_EVENTS", "3000000"))
+# can't make capture run unboundedly. Kept modest because test-runner startup
+# alone (pytest collection, fixtures) generates a huge call volume, and the
+# profile callback pays a per-call cost on every one. We keep what we captured.
+_MAX_EVENTS = int(os.environ.get("PROBE_CAPTURE_MAX_EVENTS", "600000"))
 
 _records = {}   # qualname -> list[pickled values]
 _seen = {}      # qualname -> set[hash]
