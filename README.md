@@ -146,6 +146,27 @@ changed between base and head (the rest are unchanged and uninteresting):
 python3 -m probe.verify --base main --modules mypkg --changed-only -- pytest -q
 ```
 
+### Output, CI & config
+
+- On a divergence, the report shows **what differed** — `base: …` vs `head: …` —
+  and a **minimized** witness (`--no-minimize` to skip), so you don't reproduce
+  by hand.
+- It also lists **changed-but-untested functions** (no captured inputs), so
+  "all equivalent" stays honest about what wasn't checked.
+- `--json-out report.json` and `--junit-xml report.xml` emit machine-readable
+  results for pipelines and PR annotations.
+- Put defaults in `[tool.selfsame]` (pyproject.toml) or `selfsame.toml` so
+  `selfsame verify -- pytest -q` runs with no flags:
+  ```toml
+  [tool.selfsame]
+  base = "main"
+  modules = ["mypkg"]
+  changed_only = true
+  ```
+- A function that **gained/lost a parameter** is reported as `interface-change`
+  (not a behavior divergence), and an added/removed function as `skipped` — so
+  runs across real feature history read cleanly.
+
 ### Real-world notes
 
 - **Dynamically-versioned packages** (setuptools-scm / hatch-vcs, where

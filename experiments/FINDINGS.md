@@ -540,3 +540,34 @@ Result on bidict (was: infinite hang):
   changed. This is the known, sound limit of capturing stateful objects whose
   pickle representation evolves (reported as error, never a false verdict), not a
   hook bug. slugify/humanize unchanged (no regression).
+
+## 19. User-value features (post-evaluation)
+
+Four features that turn the evaluation's findings into product value (no AI —
+the verdict path stays deterministic):
+
+1. **Divergence detail + witness minimization.** A divergence now shows the
+   rendered base vs head observation (`base: raises TypeError ...` / `head:
+   'aaaaaaaaa'`), not just the input, and shrinks the witness to a minimal
+   still-diverging input (bounded; `--no-minimize` to skip). No more reproducing
+   by hand. (`_render_canon`, `_minimize` in replay.py)
+
+2. **Coverage blind-spot report.** verify diffs base..head, intersects with the
+   target modules, and lists changed functions with NO captured inputs —
+   "Changed functions: 7 (with test inputs: 4, WITHOUT: 3)". Makes the
+   coverage==test-coverage limit explicit instead of hidden behind "100%".
+
+3. **JSON/JUnit output + config.** `--json-out` (summary + per-function verdict
+   with witness + unverified-changed list) and `--junit-xml` for CI reporters;
+   `[tool.selfsame]` in pyproject.toml (or selfsame.toml) supplies defaults so
+   `selfsame verify -- pytest -q` runs with no flags (needs 3.11+ to parse).
+
+4. **Cross-version drift handling.** Added/removed functions -> `skipped`
+   ('added in head'); a function that gained a parameter (base can't accept the
+   captured args) -> new `interface-change` verdict, not a false `divergent`.
+   Sound: when one version can't run the captured inputs, the honest verdict is
+   "can't compare", never a behavior divergence. slugify's `allow_unicode`
+   addition now reads `interface-change` (exit 0), not `divergent` (exit 1).
+
+Suite 95 -> 107. Verdict path remains fully deterministic; everything new is
+either input-side (minimize), reporting, or honest re-classification.

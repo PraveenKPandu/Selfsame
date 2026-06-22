@@ -1017,6 +1017,145 @@ class TestCaptureReentrancy(unittest.TestCase):
             h._full.discard("m::target")
 
 
+class TestDivergenceDetail(unittest.TestCase):
+    def test_render_canon_basics(self):
+        from probe.replay import _render_canon
+        self.assertEqual(_render_canon(["str", "caf"]), "'caf'")
+        self.assertEqual(_render_canon(["int", 5]), "5")
+        self.assertEqual(_render_canon(["none"]), "None")
+        self.assertEqual(_render_canon(["float", "nan"]), "nan")
+        self.assertEqual(_render_canon(["list", [["int", 1], ["int", 2]]]), "[1, 2]")
+        self.assertEqual(_render_canon(["opaque", "Foo", "x"]), "<opaque Foo>")
+
+    def test_render_obs_value_and_exc(self):
+        from probe.replay import _render_obs
+        self.assertEqual(_render_obs({"val": ["str", "x"]}), "'x'")
+        self.assertEqual(_render_obs({"exc": "ValueError"}), "raises ValueError")
+
+    def test_simpler_shrinks_each_type(self):
+        from probe.replay import _simpler
+        self.assertIn("", _simpler("hello"))
+        self.assertIn(0, _simpler(40))
+        self.assertEqual(_simpler(0), [])          # already minimal
+        self.assertEqual(_simpler(True), [])       # bools aren't shrunk
+        self.assertTrue(any(x == [] for x in _simpler([1, 2, 3])))
+
+
+class TestBlindSpot(unittest.TestCase):
+    def test_key_in_modules(self):
+        from probe.verify import _key_in_modules
+        mods = ["humanize", "slugify"]
+        self.assertTrue(_key_in_modules("humanize::intcomma", mods))
+        self.assertTrue(_key_in_modules("humanize.number::_x", mods))  # submodule
+        self.assertFalse(_key_in_modules("other.pkg::f", mods))
+        self.assertFalse(_key_in_modules("humanizer::f", mods))        # prefix trap
+
+    def test_uncovered_is_changed_minus_captured(self):
+        from probe.verify import _key_in_modules
+        mods = ["pkg"]
+        changed = {"pkg::a", "pkg::b", "pkg.sub::c", "other::d"}
+        captured = {"pkg::a"}
+        changed_here = {k for k in changed if _key_in_modules(k, mods)}
+        uncovered = sorted(changed_here - captured)
+        self.assertEqual(uncovered, ["pkg.sub::c", "pkg::b"])  # 'other::d' excluded
+
+
+class TestMachineReports(unittest.TestCase):
+    def _rows(self):
+        return [
+            ("a", 3, "equivalent", "", {}),
+            ("b", 5, "divergent", "@ input #0",
+             {"input": "(1,)", "base": "1", "head": "2", "minimized": "(1,)"}),
+            ("c", 2, "error", "timeout", {"error": "timeout"}),
+            ("d", 1, "unverifiable", "opaque-return", {"reason": "opaque-return"}),
+        ]
+
+    def test_json_report(self):
+        import json
+        import tempfile
+
+        from probe.replay import _write_machine_reports
+        tally = {"equivalent": 1, "divergent": 1, "error": 1, "unverifiable": 1}
+        p = os.path.join(tempfile.mkdtemp(), "r.json")
+        _write_machine_reports("base..head", self._rows(), tally, 1, ["pkg::x"],
+                               p, None)
+        with open(p) as f:
+            data = json.load(f)
+        self.assertEqual(data["summary"]["divergent"], 1)
+        self.assertEqual(data["summary"]["timeout"], 1)
+        self.assertEqual(data["summary"]["error"], 0)   # 1 error - 1 timeout
+        b = [r for r in data["results"] if r["function"] == "b"][0]
+        self.assertEqual(b["head"], "2")
+        self.assertEqual(data["unverified_changed"], ["pkg::x"])
+
+    def test_junit_report_is_well_formed(self):
+        import tempfile
+        from xml.dom import minidom
+
+        from probe.replay import _write_junit
+        p = os.path.join(tempfile.mkdtemp(), "r.xml")
+        _write_junit("base..head", self._rows(), p)
+        dom = minidom.parse(p)   # raises if malformed
+        suite = dom.getElementsByTagName("testsuite")[0]
+        self.assertEqual(suite.getAttribute("tests"), "4")
+        self.assertEqual(suite.getAttribute("failures"), "1")
+        self.assertEqual(len(dom.getElementsByTagName("testcase")), 4)
+
+    def test_load_config(self):
+        import tempfile
+
+        from probe.verify import _load_config
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+            f.write('[tool.selfsame]\nbase = "main"\n'
+                    'modules = ["pkg", "pkg2"]\nstrict = true\n')
+        cfg = _load_config(d)
+        if sys.version_info >= (3, 11):   # tomllib available
+            self.assertEqual(cfg.get("base"), "main")
+            self.assertEqual(cfg.get("modules"), ["pkg", "pkg2"])
+            self.assertTrue(cfg.get("strict"))
+        else:
+            self.assertEqual(cfg, {})     # gracefully absent pre-3.11
+
+
+class TestDriftHandling(unittest.TestCase):
+    def test_added_function_is_skipped_not_error(self):
+        from probe.replay import _verdict
+        b = {"loaded": False, "absent": True}      # not in base
+        h = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        verdict, note, idx, detail = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "skipped")
+        self.assertEqual(note, "added in head")
+
+    def test_removed_function_is_skipped(self):
+        from probe.replay import _verdict
+        b = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        h = {"loaded": False, "absent": True}
+        verdict, _n, _i, _d = _verdict(b, h, [b"x"])
+        self.assertEqual((verdict, _n), ("skipped", "removed in head"))
+
+    def test_signature_change_is_interface_change_not_divergent(self):
+        from probe.replay import _verdict
+        # base raises an arity TypeError (param added in head); head returns a value
+        b = {"loaded": True, "params": ["text"],
+             "obs": [{"exc": "TypeError: f() takes 1 positional argument but 2 "
+                      "were given"}]}
+        h = {"loaded": True, "params": ["text", "flag"],
+             "obs": [{"val": ["str", "ok"]}]}
+        verdict, note, idx, detail = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "interface-change")
+        self.assertIn("added flag", note)
+        self.assertEqual(detail["head_params"], ["text", "flag"])
+
+    def test_real_divergence_still_divergent_when_params_equal(self):
+        from probe.replay import _verdict
+        b = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 1]}]}
+        h = {"loaded": True, "params": ["x"], "obs": [{"val": ["int", 2]}]}
+        verdict, _n, idx, _d = _verdict(b, h, [b"x"])
+        self.assertEqual(verdict, "divergent")
+        self.assertEqual(idx, 0)
+
+
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):
         # rows are (name, n, verdict, note)

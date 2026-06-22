@@ -175,17 +175,142 @@ def _split_key(key: str):
     return key, key  # legacy/loose form
 
 
-def _check_key(base_path, head_path, key, blobs, python_exe):
+def _simpler(v):
+    """Smaller candidate values of the same type, for witness minimization."""
+    out = []
+    if isinstance(v, str) and v:
+        out += ["", v[:1], v[:len(v) // 2]]
+    elif isinstance(v, (bytes, bytearray)) and v:
+        out += [type(v)(), v[:len(v) // 2]]
+    elif isinstance(v, (list, tuple)) and v:
+        t = type(v)
+        out += [t(), t(list(v)[:len(v) // 2]), t(list(v)[1:])]
+    elif isinstance(v, dict) and v:
+        out += [{}]
+    elif isinstance(v, bool):
+        pass
+    elif isinstance(v, int) and v not in (0,):
+        out += [0, v // 2]
+    elif isinstance(v, float) and v == v and v not in (0.0,):
+        out += [0.0]
+    return out
+
+
+def _diverges_on(base_path, head_path, module, qual, values, python_exe):
+    """True iff base and head soundly disagree on a single input `values`."""
+    blob = [pickle.dumps(list(values))]
+    b = _worker(base_path, module, qual, blob, python_exe)
+    h = _worker(head_path, module, qual, blob, python_exe)
+    if not (b.get("loaded") and h.get("loaded")) or not b.get("obs") or not h.get("obs"):
+        return False
+    ob, oh = b["obs"][0], h["obs"][0]
+    if _unsound([ob]) or _unsound([oh]):
+        return False
+    return not _same(ob, oh)
+
+
+def _minimize(base_path, head_path, module, qual, values, python_exe, cap=30):
+    """Shrink a diverging witness to a smaller still-diverging input (bounded)."""
+    cur = list(values)
+    evals = 0
+    changed = True
+    while changed and evals < cap:
+        changed = False
+        for i in range(len(cur)):
+            for cand in _simpler(cur[i]):
+                if evals >= cap:
+                    break
+                evals += 1
+                trial = list(cur)
+                trial[i] = cand
+                if _diverges_on(base_path, head_path, module, qual, trial, python_exe):
+                    cur = trial
+                    changed = True
+                    break
+    return cur
+
+
+def _check_key(base_path, head_path, key, blobs, python_exe, minimize=True):
     module_name, qualname = _split_key(key)
     blobs = blobs[:_REPLAY_MAX_ARGS]
     b = _worker(base_path, module_name, qualname, blobs, python_exe)
     h = _worker(head_path, module_name, qualname, blobs, python_exe)
-    verdict, note = _verdict(b, h, blobs)
-    return (qualname, len(blobs), verdict, note)
+    verdict, note, idx, detail = _verdict(b, h, blobs)
+    if verdict == "divergent" and minimize and idx is not None:
+        orig = _decode_blob(blobs[idx])
+        if orig is not None:
+            mini = _minimize(base_path, head_path, module_name, qualname, orig,
+                             python_exe)
+            try:
+                smaller = len(pickle.dumps(mini)) < len(pickle.dumps(list(orig)))
+            except Exception:
+                smaller = False
+            if smaller:
+                note += "\n      minimized: %s" % _short(mini)
+                detail["minimized"] = _short(mini)
+    return (qualname, len(blobs), verdict, note, detail)
+
+
+def _write_machine_reports(label, rows, tally, n_timeout, uncovered,
+                           json_out, junit_out):
+    summary = {
+        "equivalent": tally.get("equivalent", 0),
+        "divergent": tally.get("divergent", 0),
+        "unverifiable": tally.get("unverifiable", 0),
+        "interface_change": tally.get("interface-change", 0),
+        "error": tally.get("error", 0) - n_timeout,
+        "timeout": n_timeout,
+        "skipped": tally.get("skipped", 0),
+    }
+    results = [dict(function=r[0], inputs=r[1], verdict=r[2], **r[4]) for r in rows]
+    if json_out:
+        payload = {"label": label, "summary": summary, "results": results,
+                   "unverified_changed": list(uncovered)}
+        try:
+            with open(json_out, "w") as f:
+                json.dump(payload, f, indent=2)
+        except OSError:
+            pass
+    if junit_out:
+        _write_junit(label, rows, junit_out)
+
+
+def _xml_escape(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _write_junit(label, rows, path):
+    n_fail = sum(1 for r in rows if r[2] == "divergent")
+    n_err = sum(1 for r in rows if r[2] == "error")
+    n_skip = sum(1 for r in rows
+                 if r[2] in ("skipped", "unverifiable", "interface-change"))
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             '<testsuite name="selfsame %s" tests="%d" failures="%d" errors="%d" '
+             'skipped="%d">' % (_xml_escape(label), len(rows), n_fail, n_err, n_skip)]
+    for r in rows:
+        name, verdict, note = r[0], r[2], r[3]
+        lines.append('  <testcase name="%s">' % _xml_escape(name))
+        if verdict == "divergent":
+            lines.append('    <failure message="behavior changed">%s</failure>'
+                         % _xml_escape(note))
+        elif verdict == "error":
+            lines.append('    <error message="%s"/>' % _xml_escape(note))
+        elif verdict in ("skipped", "unverifiable", "interface-change"):
+            lines.append('    <skipped message="%s"/>' % _xml_escape(note))
+        lines.append('  </testcase>')
+    lines.append('</testsuite>')
+    try:
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
 
 
 def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]],
-                 label: str, python_exe: str = None, strict: bool = False) -> int:
+                 label: str, python_exe: str = None, strict: bool = False,
+                 minimize: bool = True, json_out: str = None,
+                 junit_out: str = None, extra=None) -> int:
     """Compare two already-materialized versions (directories on disk).
 
     Per-function checks run in parallel (each spawns two short-lived worker
@@ -198,29 +323,36 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
     parallelism = min(8, (os.cpu_count() or 2))
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallelism) as ex:
-        futures = [ex.submit(_check_key, base_path, head_path, k, records[k], python_exe)
+        futures = [ex.submit(_check_key, base_path, head_path, k, records[k],
+                             python_exe, minimize)
                    for k in keys]
         for fut in concurrent.futures.as_completed(futures):
             rows.append(fut.result())
     rows.sort(key=lambda r: r[0])
 
     tally: Dict[str, int] = {}
-    for _name, _n, verdict, _note in rows:
-        tally[verdict] = tally.get(verdict, 0) + 1
+    for r in rows:
+        tally[r[2]] = tally.get(r[2], 0) + 1
 
     # A timeout is an error subtype; track it separately so it never reads as a
     # divergence (the two looked identical before).
-    n_timeout = sum(1 for _n, _c, v, t in rows if v == "error" and t == "timeout")
+    n_timeout = sum(1 for r in rows if r[2] == "error" and r[3] == "timeout")
     n_error = tally.get("error", 0) - n_timeout
     n_skipped = tally.get("skipped", 0)
     n_div = tally.get("divergent", 0)
 
-    for name, n, verdict, note in rows:
-        mark = "X" if verdict == "divergent" else ("!" if verdict == "error" else " ")
-        print("%s %-30s n=%-4d %-13s %s" % (mark, name, n, verdict, note))
+    if json_out or junit_out:
+        _write_machine_reports(label, rows, tally, n_timeout, extra or [],
+                               json_out, junit_out)
 
-    gen_err = sum(1 for _n, _c, v, t in rows
-                  if v == "error" and "No module named" in (t or ""))
+    n_iface = tally.get("interface-change", 0)
+    _marks = {"divergent": "X", "error": "!", "interface-change": "~"}
+    for name, n, verdict, note in (r[:4] for r in rows):
+        print("%s %-30s n=%-4d %-13s %s"
+              % (_marks.get(verdict, " "), name, n, verdict, note))
+
+    gen_err = sum(1 for r in rows
+                  if r[2] == "error" and "No module named" in (r[3] or ""))
     if gen_err:
         print("\nNote: %d function(s) errored with a missing module. A version "
               "ref's worktree may lack a build-generated file that isn't in git "
@@ -228,8 +360,8 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
               "git-ignored files under the package dir; if this persists, "
               "generate/build it in your working tree first." % gen_err)
 
-    checked = sum(1 for _n, _c, v, _t in rows
-                  if v in ("equivalent", "divergent", "unverifiable"))
+    checked = sum(1 for r in rows
+                  if r[2] in ("equivalent", "divergent", "unverifiable"))
     verifiable = tally.get("equivalent", 0) + n_div
     print("\n" + "-" * 74)
     print("Functions with captured inputs : %d" % len(rows))
@@ -238,8 +370,8 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
               % (verifiable, checked, 100.0 * verifiable / checked))
     print("  verified -> equivalent : %d   divergent : %d   unverifiable : %d"
           % (tally.get("equivalent", 0), n_div, tally.get("unverifiable", 0)))
-    print("  not verified -> skipped : %d   error : %d   timeout : %d"
-          % (n_skipped, n_error, n_timeout))
+    print("  not verified -> skipped : %d   interface-change : %d   error : %d   "
+          "timeout : %d" % (n_skipped, n_iface, n_error, n_timeout))
     if n_div:
         print("  ** %d DIVERGENCE(S): behavior changed at a tested input **" % n_div)
     if n_timeout:
@@ -258,8 +390,8 @@ def _exit_code(rows, strict) -> int:
     """Map verdict rows to a process exit code: 1 = divergence (always),
     3 = --strict and some function was unverifiable (error/timeout), 0 = clean.
     `skipped` (absent in a version) is intentional, not a failure."""
-    div = any(v == "divergent" for _n, _c, v, _t in rows)
-    incomplete = any(v == "error" for _n, _c, v, _t in rows)
+    div = any(r[2] == "divergent" for r in rows)
+    incomplete = any(r[2] == "error" for r in rows)
     if div:
         return 1
     if strict and incomplete:
@@ -284,25 +416,142 @@ def replay(repo: str, base: str, head: str, capture_path: str,
             _rm_worktree(repo, head_wt)
 
 
+def _render_canon(c, _d=0):
+    """Render a canonical observation form (canonical.py) back into a short,
+    human-readable string for divergence reports."""
+    try:
+        if not isinstance(c, list) or not c:
+            return json.dumps(c)
+        tag = c[0]
+        if tag == "none":
+            return "None"
+        if tag in ("bool", "int"):
+            return repr(c[1])
+        if tag == "float":
+            return "nan" if c[1] == "nan" else repr(c[1])
+        if tag == "str":
+            return repr(c[1])
+        if tag == "bytes":
+            return repr(bytes(c[1]))
+        if tag in ("list", "tuple", "iter", "set"):
+            items = c[1]
+            shown = ", ".join(_render_canon(x, _d + 1) for x in items[:8])
+            if len(items) > 8:
+                shown += ", ..."
+            wrap = {"list": "[%s]", "tuple": "(%s)", "set": "{%s}",
+                    "iter": "iter[%s]"}[tag]
+            return wrap % shown
+        if tag == "dict":
+            pairs = ", ".join("%s: %s" % (_render_canon(k, _d + 1),
+                                          _render_canon(v, _d + 1))
+                              for k, v in c[1][:8])
+            return "{%s}" % pairs
+        if tag in ("callable", "class"):
+            return "<%s %s>" % (tag, c[-1])
+        if tag == "range":
+            return "range(%r, %r, %r)" % (c[1], c[2], c[3])
+        if tag == "pub-obj":
+            inner = c[2][1][1] if len(c) > 2 and len(c[2]) > 1 else []
+            shown = ", ".join(_render_canon(x, _d + 1) for x in inner[:8])
+            return "%s(%s)" % (c[1], shown)
+        if tag == "obj":
+            return "%s(...)" % c[1]
+        if tag == "opaque":
+            return "<opaque %s>" % (c[1] if len(c) > 1 else "")
+        if tag == "maxdepth":
+            return "<...>"
+        return json.dumps(c)
+    except Exception:
+        return json.dumps(c) if isinstance(c, (list, dict, str, int, float)) else "?"
+
+
+def _render_obs(o):
+    if "exc" in o:
+        return "raises %s" % o["exc"]
+    if "val" in o:
+        return _render_canon(o["val"])
+    return "?"
+
+
+def _is_arity_error(o):
+    """True if the observation is a 'wrong number of arguments' TypeError — the
+    signature of a function that changed parameters between versions."""
+    e = o.get("exc") or ""
+    return "TypeError" in e and ("argument" in e or "positional" in e)
+
+
+def _decode_blob(blob):
+    try:
+        return pickle.loads(blob)
+    except Exception:
+        return None
+
+
+def _short(values, limit=120):
+    try:
+        r = repr(tuple(values)) if isinstance(values, (list, tuple)) else repr(values)
+    except Exception:
+        return "<unreprable>"
+    return r if len(r) <= limit else r[:limit - 3] + "..."
+
+
 def _verdict(b: Dict, h: Dict, blobs):
+    """Return (verdict, note, div_idx, detail). div_idx is the diverging input
+    index for 'divergent' (so the caller can minimize), else None. detail is a
+    structured dict for machine-readable output."""
     if b.get("error") or h.get("error"):
-        return "error", (b.get("error") or h.get("error"))
+        msg = b.get("error") or h.get("error")
+        return "error", msg, None, {"error": msg}
+    # Added/removed function: present in one version, not the other -> not a
+    # behavior difference, just an interface change. Report 'skipped'.
+    if b.get("absent") or h.get("absent"):
+        if b.get("absent") and h.get("absent"):
+            return "skipped", "absent in both versions", None, {}
+        where = "added in head" if b.get("absent") else "removed in head"
+        return "skipped", where, None, {"interface": where}
     if not b.get("loaded") or not h.get("loaded"):
-        return "skipped", "not present in both versions"
+        return "skipped", "not present in both versions", None, {}
     flag = _unsound(b["obs"]) or _unsound(h["obs"])
     if flag:
-        return "unverifiable", flag
+        return "unverifiable", flag, None, {"reason": flag}
     if len(b["obs"]) != len(h["obs"]):
-        return "error", "observation count mismatch"
+        return "error", "observation count mismatch", None, \
+            {"error": "observation count mismatch"}
+    params_differ = (b.get("params") is not None and h.get("params") is not None
+                     and b["params"] != h["params"])
     for i, (ob, oh) in enumerate(zip(b["obs"], h["obs"])):
         if not _same(ob, oh):
-            try:
-                arg = pickle.loads(base64.b64decode(
-                    base64.b64encode(blobs[i]).decode("ascii")))
-            except Exception:
-                arg = "?"
-            return "divergent", "@ input #%d %r" % (i, arg)
-    return "equivalent", ""
+            # A divergence driven by a signature change (one version can't accept
+            # the captured args) is an interface change, not a behavior
+            # regression. We genuinely can't observe both behaviors at this
+            # input, so don't call it 'divergent'.
+            if params_differ and (_is_arity_error(ob) or _is_arity_error(oh)):
+                bp, hp = b["params"] or [], h["params"] or []
+                added = [p for p in hp if p not in bp]
+                removed = [p for p in bp if p not in hp]
+                parts = []
+                if added:
+                    parts.append("added " + ", ".join(added))
+                if removed:
+                    parts.append("removed " + ", ".join(removed))
+                chg = "; ".join(parts) or "parameters reordered"
+                note = ("signature changed (%s) — base and head can't be called "
+                        "with the same captured arguments" % chg)
+                return "interface-change", note, None, \
+                    {"interface": chg, "base_params": bp, "head_params": hp}
+            arg = _decode_blob(blobs[i])
+            inp, base_s, head_s = _short(arg), _render_obs(ob), _render_obs(oh)
+            note = ("@ input #%d\n      input : %s\n      base  : %s"
+                    "\n      head  : %s" % (i, inp, base_s, head_s))
+            detail = {"input_index": i, "input": inp, "base": base_s,
+                      "head": head_s}
+            # method that returns the same value but mutates self differently
+            if ob.get("val") == oh.get("val") and ob.get("exc") == oh.get("exc") \
+                    and ob.get("self_after") != oh.get("self_after"):
+                note += "\n      (receiver state differs after the call)"
+                detail["receiver_state_differs"] = True
+            return "divergent", note, i, detail
+    return "equivalent", "", None, {}
 
 
 def main(argv=None) -> int:

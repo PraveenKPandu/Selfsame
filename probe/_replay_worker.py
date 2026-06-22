@@ -43,12 +43,24 @@ def main() -> int:
         from probe.canonical import canonical
 
         module = importlib.import_module(job["module_name"])
-        fn = _resolve(module, job["qualname"])
+        try:
+            fn = _resolve(module, job["qualname"])
+        except AttributeError:
+            # module imported fine but the function isn't here: it was added or
+            # removed across versions. Report 'absent' (not an error) so the
+            # verdict can be 'skipped', not a spurious failure.
+            out["absent"] = True
+            print(json.dumps(out))
+            return 0
         if not callable(fn):
             out["error"] = "not callable in this version"
             print(json.dumps(out))
             return 0
         out["loaded"] = True
+        try:
+            out["params"] = list(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            out["params"] = None
         import copy
         bound_classmethod = inspect.ismethod(fn)  # cls already bound
         qualname = job["qualname"]
