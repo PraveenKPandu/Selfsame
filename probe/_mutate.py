@@ -14,6 +14,7 @@ time), each a candidate input beyond what the tests exercised.
 
 from __future__ import annotations
 
+import ast
 import copy
 import string
 
@@ -202,11 +203,77 @@ def _havoc_value(v, rng, alphabet):
     return v
 
 
-def mutate_one(values, rng, alphabet):
-    """Return a new arg-list with one randomly-chosen position havoc-mutated."""
+# --------------------------------------------------------------------------- #
+# Dictionary tokens: magic literals mined from the target source. Random havoc
+# essentially never spells "deploy" or hits a specific magic int, but those are
+# exactly the values branch logic keys on (`if cmd == "deploy"`). Injecting them
+# as a mutation operator lets the fuzzer reach equality/membership branches.
+# --------------------------------------------------------------------------- #
+_MAX_TOKENS = 64
+_DICT_PROB = 0.3
+
+
+def tokens_from_source(source):
+    """Mine str/int/float literals from `source` -> {"str":[], "int":[], "float":[]}.
+    Bounded and deduped; skips bools and over-long strings."""
+    toks = {"str": [], "int": [], "float": []}
+    seen = {"str": set(), "int": set(), "float": set()}
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return toks
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant):
+            continue
+        v = node.value
+        if isinstance(v, bool):
+            continue            # bool is an int subclass — not a useful token
+        if isinstance(v, str) and 0 < len(v) <= 64:
+            kind = "str"
+        elif isinstance(v, int):
+            kind = "int"
+        elif isinstance(v, float):
+            kind = "float"
+        else:
+            continue
+        if v in seen[kind] or len(toks[kind]) >= _MAX_TOKENS:
+            continue
+        seen[kind].add(v)
+        toks[kind].append(v)
+    return toks
+
+
+def _dict_value(v, rng, tokens):
+    """Return a dictionary-token substitution for `v`, or None if none applies."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str) and tokens.get("str"):
+        t = rng.choice(tokens["str"])
+        if not v or rng.random() < 0.5:
+            return t                       # replace outright
+        i = rng.randint(0, len(v))
+        return v[:i] + t + v[i:]           # splice the token in
+    if isinstance(v, (bytes, bytearray)) and tokens.get("str"):
+        return rng.choice(tokens["str"]).encode("latin-1", "ignore")
+    if isinstance(v, int) and tokens.get("int"):
+        return rng.choice(tokens["int"])
+    if isinstance(v, float) and tokens.get("float"):
+        return rng.choice(tokens["float"])
+    return None
+
+
+def mutate_one(values, rng, alphabet, tokens=None):
+    """Return a new arg-list with one randomly-chosen position mutated — usually
+    via havoc, but sometimes (when `tokens` given) by injecting a dictionary
+    token mined from the target source."""
     if not values:
         return list(values)
     out = list(values)
     i = rng.randrange(len(out))
+    if tokens and rng.random() < _DICT_PROB:
+        dv = _dict_value(out[i], rng, tokens)
+        if dv is not None:
+            out[i] = dv
+            return out
     out[i] = _havoc_value(out[i], rng, alphabet)
     return out

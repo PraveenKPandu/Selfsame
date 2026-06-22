@@ -36,7 +36,7 @@ def main() -> int:
                 sys.path.insert(0, p)
         import importlib
 
-        from probe._mutate import alphabet_from, mutate_one
+        from probe._mutate import alphabet_from, mutate_one, tokens_from_source
         from probe.canonical import canonical
 
         module = importlib.import_module(job["module_name"])
@@ -56,6 +56,13 @@ def main() -> int:
             except Exception:
                 continue
         alphabet = alphabet_from(seeds)
+        tokens = {}
+        try:
+            if target_file and os.path.isfile(target_file):
+                with open(target_file, encoding="utf-8") as f:
+                    tokens = tokens_from_source(f.read())
+        except Exception:
+            tokens = {}
         budget = int(job.get("budget", 2000))
         cap = int(job.get("cap", 200))
         rng = random.Random(0)
@@ -138,7 +145,7 @@ def main() -> int:
         while execs < budget and corpus and n_fuzz < cap:
             execs += 1
             base_values = pick()
-            mutated = mutate_one(base_values, rng, alphabet)
+            mutated = mutate_one(base_values, rng, alphabet, tokens)
             cov, outcome = trace_run(mutated)
             # Keep an input that reaches a new EDGE (branchy code) OR produces a
             # new OUTPUT (data-driven code where control flow stays flat but
