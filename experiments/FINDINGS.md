@@ -339,3 +339,40 @@ orchestrator exits, then re-raises the signal with its default disposition.
 Signal handlers are installed from the main thread (worker threads only register
 their children). Verified end-to-end: SIGTERM to the orchestrator reaps its
 sleeper child (0 survivors); unit tests cover run/timeout/terminate.
+
+## 13. Capture-seeded differential fuzzing (prototype)
+
+Capture-replay is sound but **bounded to inputs the tests already exercise**, so
+its edge over "rerun the test suite on both versions" is thin. The original
+vision was differential *fuzzing* (find divergences at inputs nobody tested), but
+pure generation scored ~0% on real Python (§2). This prototype reconnects the
+two: use the **real captured inputs as seeds**, mutate around them
+(`probe/_mutate.py`) to reach inputs the tests never used, replay both versions,
+and report divergences — partitioned into "seed" (test-reachable) vs "FUZZ-ONLY"
+(beyond test coverage). Soundness is preserved: any input where either version is
+nondeterministic / does uncontrolled I/O / spawns threads / returns opaque is
+skipped, never reported.
+
+Synthetic proof (a refactor with bugs only at `scale(0)` and `shout("")`, which
+the tests don't cover):
+
+| | capture-replay (test inputs) | capture-seeded fuzz |
+|---|---|---|
+| scale | equivalent (MISS) | **divergence @ (0,)** |
+| shout | equivalent (MISS) | **divergence @ ('',)** |
+| inc (truly equivalent) | equivalent | no divergence (no false positive) |
+
+So fuzzing the seeds caught two behavior changes the test suite — and therefore
+plain capture-replay — could never see, with no false positive on the equivalent
+function.
+
+Real-world (inflection HEAD~20..WORKTREE): 8 divergences at seed inputs, plus
+**13 found only by fuzzing** (all in `titleize`, e.g. a doubled-unicode string).
+No *new* broken function beyond the seeds here — inflection's refactor changed
+behavior on test-reachable inputs, so the seeds already caught the affected
+functions; fuzzing added breadth (more witnesses), not a new catch.
+
+Takeaway: this is the piece that makes Selfsame meaningfully better than
+re-running the test suite — but only when a behavior change **hides at an
+untested edge**. It's a prototype (`probe fuzz`): mutation is a fixed
+type-aware set, not coverage-guided; that's the next step if pursued.

@@ -42,6 +42,7 @@ selfsame verify --base main --modules mypkg --changed-only -- pytest -q
 | `selfsame capture`| record real call arguments from any test or app command |
 | `selfsame replay` | replay captured arguments across two git refs |
 | `selfsame attach` | on-demand capture flush from a running, hook-enabled process |
+| `selfsame fuzz`   | *(experimental)* capture-seeded differential fuzzing — mutate real inputs to find divergences your tests don't cover |
 | `selfsame demo`   | run the built-in corpus end-to-end |
 
 Each verdict is one of: `equivalent` (trustworthy pass), `divergent` (shows the

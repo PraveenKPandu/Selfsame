@@ -767,6 +767,32 @@ class TestProcReaper(unittest.TestCase):
         self.assertIsNotNone(p.returncode)  # child was killed, not orphaned
 
 
+class TestMutation(unittest.TestCase):
+    def test_reaches_edge_values_tests_miss(self):
+        from probe._mutate import value_mutations
+        # the whole point: mutating a normal seed reaches the edge inputs that
+        # break things (0 for ints, "" for strings) which tests often skip.
+        self.assertIn(0, value_mutations(3))
+        self.assertIn("", value_mutations("hi"))
+        self.assertEqual(value_mutations(True), [False])
+
+    def test_excludes_original_and_is_type_aware(self):
+        from probe._mutate import value_mutations
+        self.assertNotIn(5, value_mutations(5))
+        self.assertTrue(all(isinstance(x, int) for x in value_mutations(5)))
+        self.assertTrue(all(isinstance(x, str) for x in value_mutations("x")))
+
+    def test_arg_set_mutations_perturb_one_position(self):
+        from probe._mutate import arg_set_mutations
+        muts = arg_set_mutations((3, "hi"))
+        self.assertIn((0, "hi"), muts)        # first position -> 0
+        self.assertIn((3, ""), muts)          # second position -> ""
+        # each mutation differs from the seed in exactly one position
+        for m in muts:
+            diffs = sum(1 for a, b in zip(m, (3, "hi")) if a != b)
+            self.assertEqual(diffs, 1)
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io

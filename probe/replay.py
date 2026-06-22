@@ -172,13 +172,14 @@ def replay(repo: str, base: str, head: str, capture_path: str,
         cap = pickle.load(f)
     records: Dict[str, List[bytes]] = cap["records"]
     base_wt = _add_worktree(repo, base)
-    head_wt = _add_worktree(repo, head)
+    head_wt = repo if head == "WORKTREE" else _add_worktree(repo, head)
     try:
         return replay_paths(base_wt, head_wt, records, "%s..%s" % (base, head),
                             python_exe)
     finally:
         _rm_worktree(repo, base_wt)
-        _rm_worktree(repo, head_wt)
+        if head_wt != repo:
+            _rm_worktree(repo, head_wt)
 
 
 def _verdict(b: Dict, h: Dict, blobs):

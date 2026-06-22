@@ -6,6 +6,7 @@ Subcommands:
   probe capture  record real call arguments from a test command
   probe attach   snapshot a running hook-enabled process's captures (no stop)
   probe replay   replay captured arguments across two refs
+  probe fuzz     capture-seeded differential fuzzing (find divergences beyond tests)
   probe demo     run the built-in corpus demo
 """
 
@@ -37,6 +38,9 @@ def main(argv=None) -> int:
         return run(rest)
     if cmd == "replay":
         from .replay import main as run
+        return run(rest)
+    if cmd == "fuzz":
+        from .fuzz import main as run
         return run(rest)
     if cmd == "demo":
         from .runner import main as run
