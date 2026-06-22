@@ -1,17 +1,19 @@
 """Coverage-guided exploration worker (AFL-style feedback loop).
 
 Runs in the head worktree. Starting from captured seeds, it repeatedly: pick a
-corpus input, havoc-mutate it (probe._mutate.mutate_one), run the function while
-tracing which lines of the target module execute, and — if the run hit *new*
-lines — keep the mutated input in the corpus. This drills through nested branches
-that blind one-shot mutation can't reach. Deterministic (seeded RNG).
+corpus input (energy-weighted — fresh/smaller inputs preferred), havoc-mutate it
+(probe._mutate.mutate_one), run the function while
+tracing which branch EDGES (prev_line -> cur_line) of the target module execute,
+and — if the run hit a *new* edge — keep the mutated input in the corpus. Edge
+coverage drills through nested branches that blind one-shot mutation can't reach.
+Deterministic (seeded RNG).
 
 It only *explores* (head version, for coverage) and emits an enriched input
 corpus; the sound base-vs-head differential comparison happens later in fuzz.py.
 
 stdin  JSON: {worktree, module_name, qualname, seeds_b64, budget, cap}
-stdout JSON: {error, inputs: [{origin, b64, repr}], coverage: {seed_lines,
-              total_lines, execs, corpus}}
+stdout JSON: {error, inputs: [{origin, b64, repr}], coverage: {seed, total,
+              execs, corpus}}
 """
 
 import base64
@@ -34,7 +36,7 @@ def main() -> int:
                 sys.path.insert(0, p)
         import importlib
 
-        from probe._mutate import alphabet_from, mutate_one
+        from probe._mutate import alphabet_from, mutate_one, tokens_from_source
         from probe.canonical import canonical
 
         module = importlib.import_module(job["module_name"])
@@ -54,6 +56,13 @@ def main() -> int:
             except Exception:
                 continue
         alphabet = alphabet_from(seeds)
+        tokens = {}
+        try:
+            if target_file and os.path.isfile(target_file):
+                with open(target_file, encoding="utf-8") as f:
+                    tokens = tokens_from_source(f.read())
+        except Exception:
+            tokens = {}
         budget = int(job.get("budget", 2000))
         cap = int(job.get("cap", 200))
         rng = random.Random(0)
@@ -61,10 +70,12 @@ def main() -> int:
         covered = set()
         seen_outcomes = set()   # distinct head outputs/exceptions seen
         corpus = []             # (values, origin, blob)
+        energy = []             # times each corpus entry has been chosen (parallel)
         seen = set()
 
         def trace_run(values):
             cov = set()
+            last = [None]   # previous line in the target file (for edge coverage)
 
             def gtr(frame, event, arg):
                 if event == "call" and frame.f_code.co_filename == target_file:
@@ -73,7 +84,11 @@ def main() -> int:
 
             def ltr(frame, event, arg):
                 if event == "line":
-                    cov.add(frame.f_lineno)
+                    # branch-EDGE coverage: (prev_line -> cur_line). Finer than
+                    # line coverage — distinguishes different control-flow paths
+                    # through the same set of lines.
+                    cov.add((last[0], frame.f_lineno))
+                    last[0] = frame.f_lineno
                 return ltr
 
             call = list(values[1:]) if bound_classmethod else list(values)
@@ -105,25 +120,36 @@ def main() -> int:
                 return False
             seen.add(h)
             corpus.append((values, origin, blob))
+            energy.append(0)
             return True
+
+        def pick():
+            # Energy-weighted corpus scheduling: favor inputs chosen FEWER times
+            # (fresh finds get drilled before over-explored seeds) and SMALLER
+            # inputs (cheaper to run, easier to reason about). AFL-style.
+            weights = [1.0 / (1.0 + energy[i]) / (1.0 + len(corpus[i][2]) / 128.0)
+                       for i in range(len(corpus))]
+            idx = rng.choices(range(len(corpus)), weights=weights, k=1)[0]
+            energy[idx] += 1
+            return corpus[idx][0]
 
         for s in seeds:
             if add(s, "seed"):
                 cov, outcome = trace_run(s)
                 covered |= cov
                 seen_outcomes.add(outcome)
-        seed_lines = len(covered)
+        seed_edges = len(covered)
 
         execs = 0
         n_fuzz = 0
         while execs < budget and corpus and n_fuzz < cap:
             execs += 1
-            base_values = rng.choice(corpus)[0]
-            mutated = mutate_one(base_values, rng, alphabet)
+            base_values = pick()
+            mutated = mutate_one(base_values, rng, alphabet, tokens)
             cov, outcome = trace_run(mutated)
-            # Keep an input that reaches a new LINE (branchy code) OR produces a
-            # new OUTPUT (data-driven code where lines stay flat but behavior
-            # varies) — robust across both styles.
+            # Keep an input that reaches a new EDGE (branchy code) OR produces a
+            # new OUTPUT (data-driven code where control flow stays flat but
+            # behavior varies) — robust across both styles.
             if (cov - covered) or (outcome not in seen_outcomes):
                 covered |= cov
                 seen_outcomes.add(outcome)
@@ -140,7 +166,7 @@ def main() -> int:
             out["inputs"].append({"origin": origin,
                                   "b64": base64.b64encode(blob).decode("ascii"),
                                   "repr": rep})
-        out["coverage"] = {"seed_lines": seed_lines, "total_lines": len(covered),
+        out["coverage"] = {"seed": seed_edges, "total": len(covered),
                            "execs": execs, "corpus": len(corpus)}
     except Exception as e:
         out["error"] = "%s: %s" % (type(e).__name__, e)

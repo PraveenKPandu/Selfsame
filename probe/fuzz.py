@@ -69,8 +69,8 @@ def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None
         if not fi or fi.get("error") or not fi.get("inputs"):
             continue
         cov = fi.get("coverage") or {}
-        cov_seed_total += cov.get("seed_lines", 0)
-        cov_total_total += cov.get("total_lines", 0)
+        cov_seed_total += cov.get("seed", 0)
+        cov_total_total += cov.get("total", 0)
         inputs = fi["inputs"]
         blobs = [base64.b64decode(i["b64"]) for i in inputs]
         b = _worker(base_path, module, qual, blobs, python_exe)
@@ -115,7 +115,7 @@ def fuzz_paths(base_path, head_path, records, label, budget=200, python_exe=None
     print("\n" + "-" * 74)
     print("Functions fuzzed                       : %d" % checked)
     if guided:
-        print("Coverage (target lines hit)            : %d at seeds -> %d after "
+        print("Coverage (branch edges hit)            : %d at seeds -> %d after "
               "fuzzing" % (cov_seed_total, cov_total_total))
     print("Divergences at TEST inputs (seeds)     : %d" % seed_div_total)
     print("Divergences found ONLY by fuzzing      : %d  (in %d functions whose "

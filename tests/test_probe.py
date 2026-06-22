@@ -819,6 +819,34 @@ class TestMutation(unittest.TestCase):
         self.assertIn("!", a)   # from seed
         self.assertIn("a", a)   # from base alphabet
 
+    def test_tokens_from_source_mines_literals(self):
+        from probe._mutate import tokens_from_source
+        src = 'def f(c):\n    if c == "deploy":\n        return 42\n    return 3.5\n'
+        toks = tokens_from_source(src)
+        self.assertIn("deploy", toks["str"])
+        self.assertIn(42, toks["int"])
+        self.assertIn(3.5, toks["float"])
+        # bools are not mined as int tokens
+        self.assertNotIn(True, toks["int"])
+
+    def test_tokens_from_source_bad_syntax(self):
+        from probe._mutate import tokens_from_source
+        self.assertEqual(tokens_from_source("def ::: bad"),
+                         {"str": [], "int": [], "float": []})
+
+    def test_mutate_one_injects_dictionary_token(self):
+        import random
+
+        from probe._mutate import mutate_one
+        # a magic string havoc would essentially never spell; with it in the
+        # dictionary, token injection produces it exactly.
+        tokens = {"str": ["deploy"], "int": [], "float": []}
+        rng = random.Random(0)
+        produced = set()
+        for _ in range(300):
+            produced.add(mutate_one(["status"], rng, list("xyz"), tokens)[0])
+        self.assertIn("deploy", produced)
+
 
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
