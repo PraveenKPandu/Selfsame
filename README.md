@@ -97,6 +97,22 @@ changed between base and head (the rest are unchanged and uninteresting):
 python3 -m probe.verify --base main --modules mypkg --changed-only -- pytest -q
 ```
 
+### Inputs from a real app, not just tests
+
+The capture command after `--` can be *anything* that runs your code — a script,
+an integration harness, or a server — so inputs aren't limited to your test
+suite:
+
+```bash
+# capture real call arguments from an actual app run
+probe capture --modules mypkg --out caps.pkl -- python -m myapp run-some-workload
+probe replay /path/to/repo main HEAD caps.pkl
+```
+
+For a long-running process (a server you exercise by hand), the hook flushes
+captures every few seconds (`PROBE_CAPTURE_FLUSH_SECS`), so an abrupt SIGTERM/
+SIGKILL still leaves a usable capture file.
+
 Capture and replay are also available separately (`probe.capture --modules M
 --out caps.pkl -- <test cmd>` then `probe.replay <repo> <base> <head> caps.pkl`).
 

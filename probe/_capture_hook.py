@@ -112,14 +112,31 @@ def _profile(frame, event, arg):
 
 
 def _flush():
-    if not _DIR or not _records:
+    if not _DIR:
         return
+    with _lock:
+        if not _records:
+            return
+        snapshot = {k: list(v) for k, v in _records.items()}
     path = os.path.join(_DIR, "cap-%d.pkl" % os.getpid())
     try:
         with open(path, "wb") as f:
-            pickle.dump(_records, f)
+            pickle.dump(snapshot, f)
     except Exception:
         pass
+
+
+# Periodic flush so capturing from a long-running process (a server, an app under
+# manual exercise) survives an abrupt SIGTERM/SIGKILL — atexit alone wouldn't run.
+_FLUSH_SECS = float(os.environ.get("PROBE_CAPTURE_FLUSH_SECS", "5"))
+
+
+def _periodic_flush():
+    import time
+    sys.setprofile(None)  # don't profile (or budget-charge) the flush thread
+    while True:
+        time.sleep(_FLUSH_SECS)
+        _flush()
 
 
 def install():
@@ -128,6 +145,8 @@ def install():
     sys.setprofile(_profile)
     threading.setprofile(_profile)  # cover threads started after us
     atexit.register(_flush)
+    if _FLUSH_SECS > 0:
+        threading.Thread(target=_periodic_flush, daemon=True).start()
 
 
 install()
