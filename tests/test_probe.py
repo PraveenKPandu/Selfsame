@@ -250,6 +250,157 @@ class TestCanonical(unittest.TestCase):
         self.assertNotEqual(canonical(1), canonical(1.0))  # type matters
 
 
+class TestPublicSnapshots(unittest.TestCase):
+    """Representation-independent snapshots via the public/observable interface.
+
+    The win: a stateful class compared by its OBSERVABLE contents instead of its
+    private internal layout, so an internal refactor that preserves behavior is
+    not falsely reported divergent -- without introducing false positives or
+    missed catches.
+    """
+
+    @staticmethod
+    def _seq_class():
+        import collections.abc as abc
+
+        class Seq(abc.Sequence):
+            # Same public class, two internal layouts (forward vs reversed
+            # storage). __dict__ differs; observable contents are identical.
+            def __init__(self, data, reversed_storage=False):
+                self._rev = reversed_storage
+                self._buf = list(reversed(data)) if reversed_storage else list(data)
+
+            def _logical(self):
+                return list(reversed(self._buf)) if self._rev else list(self._buf)
+
+            def __getitem__(self, i):
+                return self._logical()[i]
+
+            def __len__(self):
+                return len(self._buf)
+        return Seq
+
+    def test_internal_repr_change_canonicalizes_equal(self):
+        # FALSE-POSITIVE guard: internals differ, observable contents identical
+        # -> must canonicalize EQUAL (would be reported equivalent).
+        from probe.canonical import canonical
+        Seq = self._seq_class()
+        a = Seq([1, 2, 3], reversed_storage=False)
+        b = Seq([1, 2, 3], reversed_storage=True)
+        self.assertNotEqual(a.__dict__, b.__dict__)  # internals genuinely differ
+        self.assertEqual(canonical(a), canonical(b))
+        # And equality.py agrees.
+        from probe.equality import equal
+        self.assertTrue(equal(a, b))
+
+    def test_different_observable_contents_not_equal(self):
+        # MISSED-CATCH guard: genuinely different contents -> NOT equal.
+        from probe.canonical import canonical
+        from probe.equality import equal
+        Seq = self._seq_class()
+        a = Seq([1, 2, 3])
+        c = Seq([1, 2, 9])
+        self.assertNotEqual(canonical(a), canonical(c))
+        self.assertFalse(equal(a, c))
+
+    def test_sequence_snapshotted_by_contents_not_opaque(self):
+        # A Sequence-like object snapshots by contents and is comparable (not
+        # refused). Raises coverage for SortedList-style classes.
+        from probe.canonical import canonical
+        from probe.replay import _has_opaque
+        Seq = self._seq_class()
+        c = canonical(Seq([5, 6, 7]))
+        self.assertEqual(c[0], "pub-obj")
+        self.assertFalse(_has_opaque(c))
+
+    def test_set_like_snapshotted_by_contents_order_independent(self):
+        import collections.abc as abc
+
+        from probe.canonical import canonical
+
+        class SetLike(abc.Set):
+            def __init__(self, items):
+                self._items = set(items)
+
+            def __contains__(self, x):
+                return x in self._items
+
+            def __iter__(self):
+                return iter(self._items)
+
+            def __len__(self):
+                return len(self._items)
+        self.assertEqual(canonical(SetLike([1, 2, 3])), canonical(SetLike([3, 2, 1])))
+        self.assertNotEqual(canonical(SetLike([1, 2])), canonical(SetLike([1, 2, 3])))
+
+    def test_public_attributes_included_in_snapshot(self):
+        # Public (non-underscore) attributes are part of the observable snapshot;
+        # differing public attrs -> not equal even with identical contents.
+        from probe.canonical import canonical
+        from probe.equality import equal
+        Seq = self._seq_class()
+        a = Seq([1, 2, 3])
+        b = Seq([1, 2, 3])
+        a.label = "x"
+        b.label = "x"
+        self.assertEqual(canonical(a), canonical(b))
+        self.assertTrue(equal(a, b))
+        b.label = "y"
+        self.assertNotEqual(canonical(a), canonical(b))
+        self.assertFalse(equal(a, b))
+
+    def test_mapping_not_read_via_getitem(self):
+        # LRU-safety: a Mapping must NOT be materialized via __getitem__ (which
+        # would mutate cache state and corrupt the snapshot). It falls back to
+        # private-state comparison instead.
+        import collections.abc as abc
+
+        from probe.canonical import canonical
+
+        class LRUish(abc.Mapping):
+            def __init__(self):
+                self._d = {"x": 1}
+                self.gets = 0
+
+            def __getitem__(self, k):
+                self.gets += 1            # side effect on read
+                return self._d[k]
+
+            def __iter__(self):
+                return iter(self._d)
+
+            def __len__(self):
+                return len(self._d)
+        m = LRUish()
+        c = canonical(m)
+        self.assertEqual(m.gets, 0, "snapshot mutated the mapping via __getitem__")
+        self.assertNotEqual(c[0], "pub-obj")  # took the private/fallback path
+
+    def test_opaque_with_no_observable_still_refuses(self):
+        # No public interface, no introspectable state -> must REFUSE (opaque),
+        # never guess.
+        from probe.canonical import canonical
+        from probe.replay import _has_opaque
+
+        class Opaque:
+            __slots__ = ()
+        self.assertTrue(_has_opaque(canonical(Opaque())))
+
+    def test_private_only_object_still_uses_private_state(self):
+        # Non-sequence/non-set object with private state must NOT regress: it
+        # still compares by private state (so SortedList-style private paths and
+        # the existing "obj" tag are preserved).
+        from probe.canonical import canonical
+
+        class Vec:
+            def __init__(self, x):
+                self._x = x
+        c = canonical(Vec(1))
+        self.assertEqual(c[0], "obj")
+        self.assertEqual(canonical(Vec(1)), canonical(Vec(1)))
+        self.assertNotEqual(canonical(Vec(1)), canonical(Vec(2)))
+
+
 class TestReplayLogic(unittest.TestCase):
     def test_same_and_unsound(self):
         from probe import replay

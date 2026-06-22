@@ -19,6 +19,7 @@ than guessing.
 
 from __future__ import annotations
 
+import collections.abc
 import math
 import types
 from typing import Any
@@ -50,6 +51,35 @@ def _state(obj: Any):
     s = _slots_state(obj)
     if s:
         return s
+    return None
+
+
+def _public_attrs(obj: Any):
+    out = {}
+    d = getattr(obj, "__dict__", None)
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if isinstance(k, str) and not k.startswith("_"):
+                out[k] = v
+    for k in _slots_state(obj):
+        if isinstance(k, str) and not k.startswith("_"):
+            out[k] = getattr(obj, k)
+    return out
+
+
+def _public_view(obj: Any):
+    """Representation-independent observable view of an identity-equality
+    Sequence/Set, or None when no *side-effect-free* public view exists.
+
+    Mappings are excluded (reading items mutates LRU caches); they fall back to
+    private-state comparison. Mirrors probe.canonical._public_snapshot.
+    """
+    if isinstance(obj, collections.abc.Mapping):
+        return None
+    if isinstance(obj, collections.abc.Sequence):
+        return ("seq", list(obj), _public_attrs(obj))
+    if isinstance(obj, collections.abc.Set):
+        return ("set", frozenset(obj), _public_attrs(obj))
     return None
 
 
@@ -98,6 +128,22 @@ def equal(a: Any, b: Any, _depth: int = 0) -> bool:
             return bool(a == b)
         except Exception:
             return False
+
+    # Identity-equality Sequence/Set: compare by OBSERVABLE contents so a
+    # refactor that changes internal layout but preserves contents is still
+    # equal (representation-independent). `ta is tb` already holds, so this only
+    # compares same-typed containers. Mappings are excluded (side-effecting
+    # reads) and fall through to private-state comparison below.
+    try:
+        va, vb = _public_view(a), _public_view(b)
+    except Exception:
+        va = vb = None  # broken __iter__ etc. -> fall back, never guess
+    if va is not None and vb is not None:
+        kind_a, items_a, pub_a = va
+        kind_b, items_b, pub_b = vb
+        if kind_a != kind_b:
+            return False
+        return equal(items_a, items_b, _depth + 1) and equal(pub_a, pub_b, _depth + 1)
 
     # Identity-equality object: compare introspected state. This is the fix for
     # the repr-address false-divergence.
