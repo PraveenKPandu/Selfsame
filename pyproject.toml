@@ -27,3 +27,12 @@ probe = "probe.cli:main"
 
 [tool.setuptools]
 packages = ["probe", "units"]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+extend-exclude = ["name-claim", "experiments"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+

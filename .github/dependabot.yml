@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Selfsame has no Python runtime dependencies; keep the GitHub Actions current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

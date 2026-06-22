@@ -13,8 +13,7 @@ from typing import List, Optional
 
 from . import harness
 from .generators import UnsupportedSignature, generate
-from .model import (EXPECT_DIVERGENT, EXPECT_EQUIVALENT, EXPECT_UNKNOWN,
-                    EXPECT_UNVERIFIABLE, Unit)
+from .model import EXPECT_DIVERGENT, EXPECT_EQUIVALENT, EXPECT_UNKNOWN, EXPECT_UNVERIFIABLE, Unit
 
 # Real-probe band from the README: a result here means "promising, confirm in a
 # typed language". Shown for context; not a pass/fail gate on the stand-in corpus.

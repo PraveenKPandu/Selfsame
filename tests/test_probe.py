@@ -4,7 +4,6 @@ Run: python3 -m unittest discover -s tests
 """
 
 import datetime
-import math
 import secrets
 import time
 import unittest
@@ -419,7 +418,9 @@ class TestReplayLogic(unittest.TestCase):
 
         from probe import replay
         blobs = [pickle.dumps(["q"])]
-        loaded = lambda obs: {"loaded": True, "error": None, "obs": obs}
+
+        def loaded(obs):
+            return {"loaded": True, "error": None, "obs": obs}
         eq = loaded([{"val": ["str", "Q"], "io": 0, "threads": 0}])
         self.assertEqual(replay._verdict(eq, eq, blobs)[0], "equivalent")
         diff = loaded([{"val": ["str", "Z"], "io": 0, "threads": 0}])

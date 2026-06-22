@@ -24,8 +24,7 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
-from .extract import (Pairing, build_function, pair_functions, source_from_file,
-                      source_from_git)
+from .extract import pair_functions, source_from_file, source_from_git
 
 _TIMEOUT_S = 15
 
