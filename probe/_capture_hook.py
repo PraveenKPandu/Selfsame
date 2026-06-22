@@ -57,6 +57,14 @@ _seen = {}      # key -> set[hash]
 _full = set()   # keys that hit the per-func cap (fast path: stop recording)
 _lock = threading.Lock()
 
+# Per-thread re-entrancy guard. Recording a call pickles its arguments (incl. the
+# receiver `self`) for the dedup key; pickling an object can invoke its own
+# wrapped methods (e.g. a Mapping's __getitem__/__iter__ via __reduce__), which
+# would re-enter recording and pickle the same object again — unbounded recursion
+# that hung capture on cyclic/interdependent classes like bidict. While a thread
+# is recording, any wrapped call it triggers is passed straight through, unrecorded.
+_recording = threading.local()
+
 
 def _is_test_module(name):
     for part in name.split("."):
@@ -129,8 +137,15 @@ def _wrap(fn, key):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        if key not in _full:  # fast path once we have enough samples
-            _record(key, sig, args, kwargs)
+        # fast path once we have enough samples; re-entrancy guard prevents a
+        # call triggered *while* recording (e.g. during pickling of `self`) from
+        # recursing back into recording.
+        if key not in _full and not getattr(_recording, "active", False):
+            _recording.active = True
+            try:
+                _record(key, sig, args, kwargs)
+            finally:
+                _recording.active = False
         return fn(*args, **kwargs)
 
     wrapper.__probe_wrapped__ = True

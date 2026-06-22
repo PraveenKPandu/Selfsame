@@ -512,3 +512,31 @@ verdict.
 Net: the soundness guarantee was already intact (the evaluation found zero false
 confidence); these changes are about not failing silently or running away on the
 packaging/test-suite realities of modern Python. Suite 86 -> 94 tests.
+
+## 18. Capture-hook re-entrancy guard (the bidict hang)
+
+The re-run evaluation (§17 follow-up) found the capture hook hung *forever* on
+bidict: a trivial driver ran in 0.13s plain but never returned under the hook.
+Root cause: recording a call pickles its arguments (incl. the receiver `self`)
+for the dedup key, and pickling a Mapping like bidict invokes its own wrapped
+methods (`__getitem__`/`__iter__` via `__reduce__`), which re-enter recording and
+pickle the same cyclic object again — unbounded recursion.
+
+Fix (`probe/_capture_hook.py`): a per-thread re-entrancy guard. While a thread is
+recording, any wrapped call it triggers (e.g. during pickling of `self`) passes
+straight through unrecorded. The top-level call is still captured; only the
+spurious pickle-induced nested calls are skipped — sound, since capture is
+best-effort and missing inputs only lower coverage, never cause a false verdict.
+The scoped-profile (`__main__`) path needs no guard: CPython already suppresses
+the profile callback while it runs. +1 regression test (a class whose `__reduce__`
+re-enters a wrapped call must complete and record at most once).
+
+Result on bidict (was: infinite hang):
+- driver capture: **66 arg-sets across 21 functions in ~0.6s**.
+- same-version replay (base=HEAD): 6 equivalent, 15 `opaque-state` (bidict's
+  internal Nodes/dicts correctly refused), **0 error, 0 timeout**.
+- cross-version (HEAD~40): 17 `error: 'dict' object is not callable` — the
+  head-pickled `self` cannot reconstruct in the older base whose internal layout
+  changed. This is the known, sound limit of capturing stateful objects whose
+  pickle representation evolves (reported as error, never a false verdict), not a
+  hook bug. slugify/humanize unchanged (no regression).
