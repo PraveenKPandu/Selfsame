@@ -734,6 +734,38 @@ class TestEntryScriptCaptureUnit(unittest.TestCase):
         self.assertEqual(pickle.loads(pickle.dumps(captured["vals"])), [3, 4])
 
 
+class TestProcReaper(unittest.TestCase):
+    def test_run_captures_output(self):
+        import sys
+
+        from probe import _procs
+        r = _procs.run([sys.executable, "-c", "print('hi')"],
+                       capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("hi", r.stdout)
+
+    def test_run_timeout_raises_and_kills(self):
+        import subprocess
+        import sys
+
+        from probe import _procs
+        with self.assertRaises(subprocess.TimeoutExpired):
+            _procs.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+
+    def test_terminate_all_reaps_tracked_child(self):
+        import subprocess
+        import sys
+
+        from probe import _procs
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                             start_new_session=True)
+        with _procs._lock:
+            _procs._live.add(p)
+        _procs._terminate_all()
+        p.wait(timeout=5)
+        self.assertIsNotNone(p.returncode)  # child was killed, not orphaned
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
