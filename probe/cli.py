@@ -2,6 +2,8 @@
 
 Subcommands:
   probe verify   verify a refactor using the repo's own tests (the main path)
+  probe snapshot freeze the current build's behavior to a baseline file
+  probe drift    measure how much current code deviates from the snapshot baseline
   probe check    check a refactor by generating inputs (two files or git refs)
   probe capture  record real call arguments from a test command
   probe attach   snapshot a running hook-enabled process's captures (no stop)
@@ -26,6 +28,12 @@ def main(argv=None) -> int:
 
     if cmd == "verify":
         from .verify import main as run
+        return run(rest)
+    if cmd == "snapshot":
+        from .snapshot import record_main as run
+        return run(rest)
+    if cmd == "drift":
+        from .snapshot import drift_main as run
         return run(rest)
     if cmd == "check":
         from .check import main as run

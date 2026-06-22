@@ -1238,6 +1238,53 @@ class TestCaptureGuards(unittest.TestCase):
             capture._CAPTURE_TIMEOUT = old
 
 
+class TestSnapshotDrift(unittest.TestCase):
+    def _git(self, repo, *a):
+        import subprocess
+        subprocess.check_call(["git", "-C", repo] + list(a),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_snapshot_then_drift_detects_regression(self):
+        import shutil
+        import tempfile
+
+        from probe import snapshot as S
+        repo = tempfile.mkdtemp(prefix="probe_snap_")
+        try:
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "t@t.t")
+            self._git(repo, "config", "user.name", "t")
+            os.makedirs(os.path.join(repo, "app"))
+            open(os.path.join(repo, "app", "__init__.py"), "w").close()
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def greet(name):\n    return 'Hello, ' + name\n")
+            with open(os.path.join(repo, "test_app.py"), "w") as f:
+                f.write("from app.core import greet\n"
+                        "def test_g():\n    assert greet('x') == 'Hello, x'\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "commit", "-m", "v1")
+
+            snap_path = os.path.join(repo, ".selfsame", "snapshot.json")
+            cmd = [sys.executable, "-m", "pytest", "-q"]
+            snap = S.record_snapshot(repo, ["app"], cmd, snap_path, sys.executable)
+            self.assertIsNotNone(snap)
+            self.assertIn("app.core::greet", snap["records"])
+
+            # no change -> no drift -> exit 0
+            self.assertEqual(
+                S.check_drift(repo, snap_path, python_exe=sys.executable,
+                              write_report=False), 0)
+
+            # silent regression -> drift detected -> exit 1
+            with open(os.path.join(repo, "app", "core.py"), "w") as f:
+                f.write("def greet(name):\n    return 'Hi, ' + name\n")
+            self.assertEqual(
+                S.check_drift(repo, snap_path, python_exe=sys.executable,
+                              write_report=False), 1)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io

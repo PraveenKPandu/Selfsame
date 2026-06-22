@@ -403,7 +403,19 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
         for fut in concurrent.futures.as_completed(futures):
             rows.append(fut.result())
     rows.sort(key=lambda r: r[0])
+    return _emit_results(label, rows, strict=strict, json_out=json_out,
+                         junit_out=junit_out, extra=extra, refs=refs,
+                         report_dir=report_dir, write_report=write_report, env=env,
+                         header="Functions with captured inputs")
 
+
+def _emit_results(label, rows, strict=False, json_out=None, junit_out=None,
+                  extra=None, refs=None, report_dir=".selfsame",
+                  write_report=True, env=None,
+                  header="Functions with captured inputs") -> int:
+    """Tally, print the verdict table + summary, write the agent report, and
+    return the exit code. Shared by the branch-vs-branch (replay_paths) and
+    snapshot-drift paths."""
     tally: Dict[str, int] = {}
     for r in rows:
         tally[r[2]] = tally.get(r[2], 0) + 1
@@ -434,7 +446,7 @@ def replay_paths(base_path: str, head_path: str, records: Dict[str, List[bytes]]
                   if r[2] in ("equivalent", "divergent", "unverifiable"))
     verifiable = tally.get("equivalent", 0) + n_div
     print("\n" + "-" * 74)
-    print("Functions with captured inputs : %d" % len(rows))
+    print("%-31s: %d" % (header, len(rows)))
     if checked:
         print("Sound auto-verify              : %d/%d = %.0f%%"
               % (verifiable, checked, 100.0 * verifiable / checked))
