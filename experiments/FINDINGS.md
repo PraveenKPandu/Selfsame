@@ -412,3 +412,33 @@ Takeaway: coverage *and* output-diversity together make the guided fuzzer robust
 across branchy and data-driven code, still sound (FUZZ-ONLY = real, io/threads/
 nondeterministic/opaque inputs skipped). Next refinements if pursued: branch-edge
 (not line) coverage, energy assignment / corpus scheduling, and dictionary tokens.
+
+## 15. Fuzzer refinements: edge coverage, energy scheduling, dictionary tokens
+
+The three follow-ups from §14, each proven on a minimal fixture that isolates
+the capability:
+
+1. **Branch-edge coverage** (`_cgfuzz_worker.py`): trace `(prev_line -> cur_line)`
+   transitions instead of bare line hits. Strictly finer than line coverage —
+   distinguishes different control-flow paths through the same lines (what AFL
+   uses). Coverage keys renamed `seed_lines/total_lines -> seed/total`.
+
+2. **Energy-weighted corpus scheduling** (`_cgfuzz_worker.py`): replace uniform
+   `rng.choice(corpus)` with a weighted pick — `1/(1+times_chosen)` (drill fresh
+   finds before over-explored seeds) times `1/(1+size)` (prefer smaller inputs).
+
+3. **Dictionary tokens** (`_mutate.py`): `tokens_from_source()` mines str/int/
+   float literals from the target module via `ast`; `mutate_one(..., tokens)`
+   injects them (prob 0.3, type-matched, replace-or-splice for strings). Reaches
+   exact-match branches havoc can't (`if cmd == "deploy"`).
+
+Proof — each refinement isolated against one-shot:
+
+| fixture (bug location)                       | one-shot | guided (refined) |
+|----------------------------------------------|----------|------------------|
+| nested `startswith("k") and len>5`           | 0        | found `('kbckbc',)`, edges 2->5 |
+| exact-match `cmd == "deploy"` (mined literal)| 0        | found `('deploy',)` via dictionary |
+
+Suite 75 -> 78 tests (token mining, bad-syntax fallback, token injection). Still
+sound. Possible further work: branch-edge *hashing* (AFL's bucketed hit counts),
+splice/crossover between corpus entries, and structural mutation of containers.
