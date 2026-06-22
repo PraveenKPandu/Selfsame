@@ -21,7 +21,6 @@ import argparse
 import glob
 import os
 import pickle
-import subprocess
 import sys
 import tempfile
 from typing import Dict, List
