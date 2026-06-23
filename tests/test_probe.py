@@ -1498,6 +1498,88 @@ class TestPytestPlugin(unittest.TestCase):
             shutil.rmtree(repo, ignore_errors=True)
 
 
+class TestAdjudicator(unittest.TestCase):
+    def test_parse_assume(self):
+        from probe.adjudicate import _parse_assume
+        c = _parse_assume("target=p::f,boundary=p::g,violations=none|raises")
+        self.assertEqual(c["target"], "p::f")
+        self.assertEqual(c["boundary"], "p::g")
+        self.assertEqual(c["violations"], ["none", "raises"])
+        self.assertIsNone(_parse_assume("target=p::f"))   # missing boundary
+
+    def test_candidate_verdict_aggregation(self):
+        from probe.adjudicate import _candidate_verdict
+        lb = {"violations": [{"result": "load-bearing"}, {"result": "not-load-bearing"}]}
+        self.assertEqual(_candidate_verdict(lb)[0], "load-bearing")
+        nlb = {"violations": [{"result": "not-load-bearing"}], "boundary_invoked": True}
+        self.assertEqual(_candidate_verdict(nlb)[0], "not-load-bearing")
+        unv = {"violations": [{"result": "unverifiable", "reason": "opaque-return"}]}
+        self.assertEqual(_candidate_verdict(unv)[0], "unverifiable")
+        self.assertEqual(_candidate_verdict({"error": "boom"})[0], "unverifiable")
+
+    def test_violation_stubs(self):
+        from probe._adjudicate_worker import _make_stub
+        c = [0]
+        self.assertIsNone(_make_stub("none", c)())
+        self.assertEqual(_make_stub("zero", c)(), 0)
+        self.assertEqual(_make_stub("negative", c)(), -1)
+        self.assertIsInstance(_make_stub("wrong-type", c)(), str)
+        with self.assertRaises(RuntimeError):
+            _make_stub("raises", c)()
+        self.assertTrue(c[0] >= 5)   # every stub bumped the invocation counter
+
+    def _git(self, repo, *a):
+        import subprocess
+        subprocess.check_call(["git", "-C", repo] + list(a),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_adjudicate_end_to_end(self):
+        import contextlib
+        import io
+        import shutil
+        import tempfile
+
+        from probe import adjudicate
+        repo = tempfile.mkdtemp(prefix="probe_adj_")
+        try:
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "t@t.t")
+            self._git(repo, "config", "user.name", "t")
+            os.makedirs(os.path.join(repo, "pkg"))
+            open(os.path.join(repo, "pkg", "__init__.py"), "w").close()
+            with open(os.path.join(repo, "pkg", "fx.py"), "w") as f:
+                f.write("def fx_rate(c):\n    return 1.1\n")
+            with open(os.path.join(repo, "pkg", "bill.py"), "w") as f:
+                f.write("from pkg.fx import fx_rate\n\n"
+                        "def total(amount, c):\n"
+                        "    return round(amount * fx_rate(c), 2)\n\n"
+                        "def greet(name):\n"
+                        "    try:\n        fx_rate(name)\n    except Exception:\n"
+                        "        pass\n    return 'hi ' + name\n")
+            with open(os.path.join(repo, "test_app.py"), "w") as f:
+                f.write("from pkg.bill import total, greet\n"
+                        "def test_it():\n    assert total(100, 'USD') == 110.0\n"
+                        "    assert greet('Sam') == 'hi Sam'\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "commit", "-m", "v1")
+
+            argv = ["--repo", repo, "--no-report", "--fail-on-load-bearing",
+                    "--assume", "target=pkg.bill::total,boundary=pkg.bill::fx_rate",
+                    "--assume", "target=pkg.bill::greet,boundary=pkg.bill::fx_rate",
+                    "--", sys.executable, "-m", "pytest", "-q"]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = adjudicate.main(argv)
+            out = buf.getvalue()
+            self.assertEqual(code, 1)                       # total is load-bearing
+            self.assertIn("load-bearing", out)
+            # total depends on fx_rate; greet swallows it
+            self.assertRegex(out, r"total\s+assumes.*load-bearing")
+            self.assertRegex(out, r"greet\s+assumes.*not-load-bearing")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+
 class TestCLI(unittest.TestCase):
     def test_dispatch(self):
         import io
