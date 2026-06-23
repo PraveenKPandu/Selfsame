@@ -9,6 +9,7 @@ Subcommands:
   probe attach   snapshot a running hook-enabled process's captures (no stop)
   probe replay   replay captured arguments across two refs
   probe fuzz     capture-seeded differential fuzzing (find divergences beyond tests)
+  probe adjudicate  prove whether a nominated assumption is load-bearing (experimental)
   probe demo     run the built-in corpus demo
 """
 
@@ -49,6 +50,9 @@ def main(argv=None) -> int:
         return run(rest)
     if cmd == "fuzz":
         from .fuzz import main as run
+        return run(rest)
+    if cmd == "adjudicate":
+        from .adjudicate import main as run
         return run(rest)
     if cmd == "demo":
         from .runner import main as run

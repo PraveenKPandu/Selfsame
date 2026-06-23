@@ -715,3 +715,35 @@ dates, paths, or regex results. Suite 112 -> 118.
 (Scope note: this lifts the OPAQUE bucket. The other refusal causes —
 uncontrolled-io, nondeterminism, threads, cross-version pickle errors, and
 coverage==test-coverage — are separate levers and mostly *should* stay refused.)
+
+## 24. Assumption adjudicator MVP (experimental) — proving load-bearingness
+
+From the v0.3 brainstorm + design (docs/adjudicator.md): the one unbuilt wedge in
+the LLM-code landscape is *proving* whether a silent assumption is load-bearing —
+everyone else guesses. Built it as `selfsame adjudicate` (experimental).
+
+Mechanism: hold the code fixed; for a NOMINATED candidate `(target, boundary)`,
+re-run `target` on its captured inputs once normally and once with the `boundary`
+monkeypatched to violate the assumed contract (`none`/`raises`/`wrong-type`/
+`zero`/`negative`), and compare via the existing canonical comparator + soundness
+model. Verdict: **load-bearing** (sound divergence, with a minimized witness) /
+**not-load-bearing** / **unverifiable**. Judge, not detective — enumeration of
+candidates stays out of core (kept the two engine invariants intact). New code:
+`probe/adjudicate.py` + `probe/_adjudicate_worker.py` + `adjudicate` CLI; reuses
+capture / harness / canonical / `_same` / `_unsound` / `_simpler` / `_render_obs`.
+
+Proven on a smoke repo: `format_invoice` calling `fx_rate` → **load-bearing** on
+every violation (None→`int*None` TypeError, raises→propagates, zero/negative→value
+change, wrong-type→`__round__` TypeError), each with a witness. A `try/except`
+fire-and-forget `greet` → **not-load-bearing** (swallows all violations). And the
+precision payoff: a `safe_invoice` that defaults a bad *value* but calls the
+boundary outside `try` → **load-bearing via `raises` only** — it correctly
+separates "tolerates a bad value" from "tolerates a failure". Output is advisory
+(exit 0; `--fail-on-load-bearing` to gate), written to a SEPARATE
+`.selfsame/assumptions.json` (distinct artifact from verify/drift's report, so the
+coverage-blindspot and assumption-blindspot types never blur). Suite 118→122.
+
+Known MVP wart: witness minimization can over-reduce a numeric witness to a
+degenerate `0` vs `0.0` case (sound, just less illustrative). Deferred to v0.3.x
+along with shape-aware violations (`empty`/`missing-key`/`reordered`), candidate
+ranking, and an optional out-of-core heuristic candidate proposer.

@@ -1,9 +1,24 @@
-# Design: the assumption adjudicator (proposed, experimental)
+# Design: the assumption adjudicator (experimental)
 
-> **Status:** proposed / not yet implemented. Targets v0.3.x as an **experimental**
-> command, staged exactly like `fuzz`. This document specifies it against the
-> engine contract in [architecture.md](architecture.md); section references below
-> (§N) point there.
+> **Status:** MVP **implemented** (experimental), targeting v0.3.0 — `selfsame
+> adjudicate`, `probe/adjudicate.py` + `probe/_adjudicate_worker.py`. Staged like
+> `fuzz` (not blessed as sound until the `experiments/` corpus shows 0%
+> confidently-wrong). This document specifies it against the engine contract in
+> [architecture.md](architecture.md); section references below (§N) point there.
+>
+> **MVP scope shipped:** violations `none`/`raises`/`wrong-type`/`zero`/`negative`;
+> CLI (`--assume`) + `.selfsame/assumptions.toml` nomination; baseline from a test
+> command or `--snapshot`; in-worker witness minimization; report written to
+> `.selfsame/assumptions.json` + `.md` (a **separate artifact** from verify/drift's
+> `report.json`, to keep the two blindspot types distinct — see §3); advisory exit
+> (`--fail-on-load-bearing` to gate). **Deferred (v0.3.x):** shape-aware
+> `empty`/`missing-key`/`reordered`, candidate ranking, an out-of-core heuristic
+> proposer.
+>
+> **Known MVP limitation:** witness minimization can over-reduce a numeric witness
+> to a degenerate case (e.g. `amount=0`, where the divergence is only `0` vs `0.0`).
+> The verdict stays sound; the witness is just less illustrative. Tracked for
+> v0.3.x.
 
 ## 1. What it is — in one sentence
 

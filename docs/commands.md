@@ -149,6 +149,24 @@ any divergence. Soundness is preserved — unsound inputs are skipped, never rep
 
 ---
 
+## `adjudicate` *(experimental)* — prove whether a nominated assumption is load-bearing
+
+```bash
+selfsame adjudicate --assume target=pkg::fn,boundary=pkg::dep -- pytest -q
+selfsame adjudicate --assumptions .selfsame/assumptions.toml --snapshot .selfsame/snapshot.json
+```
+
+Holds the code fixed, deliberately **violates** a nominated assumption at its dependency
+`boundary` (returns `none`/`zero`/`negative`/`wrong-type`, or `raises`), re-runs `target`
+on its captured inputs, and compares to the baseline — reporting **load-bearing** (with a
+minimized witness), **not-load-bearing**, or **unverifiable**. It is a *judge, not a
+detective*: you nominate candidates (`--assume`, repeatable; or a `[[assume]]` TOML via
+`--assumptions`); it never enumerates them. Advisory by default (exit 0);
+`--fail-on-load-bearing` gates CI. Writes `.selfsame/assumptions.json` + `.md`. Full design:
+[adjudicator.md](adjudicator.md).
+
+---
+
 ## `demo`
 
 ```bash
