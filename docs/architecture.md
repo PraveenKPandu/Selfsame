@@ -357,7 +357,8 @@ assumption adjudicator) is a **fourth input source**: it produces observations
 from the same worker/harness/canonical machinery, and its result is judged by the
 same soundness model and serialized into a **distinct** report section. Keep any
 *enumeration* of what to perturb out of the core (heuristic); the core only
-*adjudicates* nominated candidates.
+*adjudicates* nominated candidates. See the design in
+[adjudicator.md](adjudicator.md).
 
 **Known debt**
 - `canonical.py` and `equality.py` duplicate structural logic — unify or keep in
