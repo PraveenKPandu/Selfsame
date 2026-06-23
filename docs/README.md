@@ -12,6 +12,7 @@ Start here:
 4. **[Configuration](configuration.md)** — config file, environment variables, exit codes.
 5. **[How it works](how-it-works.md)** — the capture → replay → compare engine and the soundness model.
 6. **[Limitations](limitations.md)** — the honest boundaries; read this before you depend on a green result.
+7. **[Architecture & spec](architecture.md)** — the normative engineering contract (data formats, canonical-form schema, soundness rules, verdict model, module map). For contributors and anyone extending the engine.
 
 ## The core idea in one picture
 

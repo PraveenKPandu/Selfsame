@@ -124,6 +124,7 @@ Full reference with every flag: **[docs/commands.md](docs/commands.md)**.
 | ⚙️ [Configuration](docs/configuration.md) | `[tool.selfsame]`, environment variables, exit codes |
 | 🛠️ [How it works](docs/how-it-works.md) | capture → replay → compare, and the soundness model |
 | 🧭 [Limitations](docs/limitations.md) | the honest boundaries — read before you rely on it |
+| 📐 [Architecture & spec](docs/architecture.md) | the engineering contract — data formats, canonical schema, verdict model (for contributors) |
 
 ## Project
 
