@@ -14,6 +14,10 @@ Start here:
 6. **[Limitations](limitations.md)** — the honest boundaries; read this before you depend on a green result.
 7. **[Architecture & spec](architecture.md)** — the normative engineering contract (data formats, canonical-form schema, soundness rules, verdict model, module map). For contributors and anyone extending the engine.
 
+### Design proposals (not yet shipped)
+
+- **[Assumption adjudicator](adjudicator.md)** — a proposed experimental command that proves, soundly, whether a *nominated* assumption in code is load-bearing (perturb the assumption, re-run on captured inputs, compare). Specced against the architecture above.
+
 ## The core idea in one picture
 
 ```
