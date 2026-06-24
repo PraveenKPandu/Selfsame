@@ -13,6 +13,11 @@ the results structurally. Use it to prove a refactor didn't change behavior — 
 the silent regressions that creep in when an AI agent ships features all day and "a new
 feature works, but the old ones quietly broke."
 
+![Selfsame catching a silent regression that passing tests missed](assets/selfsame-demo.gif)
+
+*Tests pass — but a "harmless" refactor silently changed `apply_discount(250, 33)` from
+`167.50` to `167.49`. `selfsame drift` catches it. (Reproduce: [`demo/`](demo/).)*
+
 > ### The one promise: **zero false confidence**
 > Selfsame never says `equivalent` when behavior actually differs, and never says
 > `divergent` when it doesn't. When it can't be sure, it **refuses** (`unverifiable`)
