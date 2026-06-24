@@ -52,13 +52,16 @@ def _slots_state(obj: Any):
 
 
 def _state(obj: Any):
-    """Best-effort structural state of an identity-equality object, or None."""
+    """Best-effort structural state of an identity-equality object, or None.
+
+    A present-but-empty __dict__ is empty state (comparable), not "no state" —
+    so two stateless instances of the same class compare equal."""
     d = getattr(obj, "__dict__", None)
-    if d:
-        return dict(d)
     s = _slots_state(obj)
-    if s:
-        return s
+    if isinstance(d, dict) or s:
+        out = dict(d) if isinstance(d, dict) else {}
+        out.update(s)
+        return out
     return None
 
 
