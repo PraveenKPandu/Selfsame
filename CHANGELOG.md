@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-24
+
+A new axis of verification — proving that a passing result actually *depends* on
+a silent assumption — plus a wider determinism net and a robustness fix for
+replaying live working trees.
+
+### Added
+- **Assumption adjudicator** (`selfsame adjudicate`, experimental) — holds the
+  code fixed and *violates a nominated dependency boundary* (`none`/`raises`/
+  `wrong-type`/`zero`/`negative`), re-runs on the captured inputs, and reports
+  whether the behavior was **load-bearing** on that assumption (with a minimized
+  witness), **not-load-bearing**, or **unverifiable**. A judge, not a detective:
+  it adjudicates assumptions you nominate, it does not enumerate them. The
+  `wrong-type` violation is shape-aware (a genuine type mismatch vs. the boundary's
+  real return), and a nomination that never takes effect is flagged `boundary not
+  invoked` so it can't masquerade as tolerant. Advisory by default (exit 0);
+  `--fail-on-load-bearing` gates CI. Writes `.selfsame/assumptions.json` + `.md`.
+- **Architecture & engineering spec** (`docs/architecture.md`) — the normative
+  contract: data/wire formats, canonical-form schema, soundness rules, verdict
+  model, and module map. Plus the adjudicator design (`docs/adjudicator.md`).
+
+### Changed
+- **Broader determinism control** — the harness now also freezes
+  `from datetime import datetime/date` references captured at import across all
+  loaded modules, and makes unseeded `random.Random()` instances deterministic.
+  Remaining gaps (aliased `... as dt` imports, C-level extension entropy) surface
+  as `unverifiable`, never as false confidence.
+
+### Fixed
+- **Stateless objects are comparable** — an object with a present-but-empty
+  `__dict__`/`__slots__` is now treated as empty state (so methods on stateless
+  receivers are verifiable) instead of being refused as opaque; only objects with
+  no introspectable state at all stay opaque.
+- **Stale-bytecode replay bug** — replay/adjudicate workers compile the target
+  from current source (`sys.dont_write_bytecode` + a fresh `pycache_prefix`), so
+  replaying a live working tree right after a same-size, same-mtime-second edit no
+  longer risks importing a stale `.pyc` and reporting a real change as equivalent.
+
 ## [0.2.0] - 2026-06-22
 
 The release that makes Selfsame fit AI-driven development: detect behavioral
