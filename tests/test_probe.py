@@ -1498,6 +1498,49 @@ class TestPytestPlugin(unittest.TestCase):
             shutil.rmtree(repo, ignore_errors=True)
 
 
+class TestNondeterminismLever(unittest.TestCase):
+    def test_from_import_datetime_is_frozen(self):
+        import datetime as _dt
+        import types
+
+        from probe.harness import _Controlled
+        m = types.ModuleType("selfsame_test_dtmod")
+        m.datetime = _dt.datetime          # the `from datetime import datetime` shape
+        m.date = _dt.date
+        sys.modules["selfsame_test_dtmod"] = m
+        try:
+            with _Controlled():
+                self.assertEqual(m.datetime.now(), m.datetime.now())   # frozen
+                self.assertEqual(m.date.today(), m.date.today())
+            # restored to the real classes after exit
+            self.assertIs(m.datetime, _dt.datetime)
+            self.assertIs(m.date, _dt.date)
+        finally:
+            del sys.modules["selfsame_test_dtmod"]
+
+    def test_unseeded_random_instance_is_deterministic(self):
+        import random
+
+        from probe.harness import _Controlled
+        with _Controlled():
+            r1 = random.Random().random()
+        with _Controlled():
+            r2 = random.Random().random()
+        self.assertEqual(r1, r2)                       # unseeded -> deterministic
+        with _Controlled():
+            e = random.Random(123).random()
+        self.assertEqual(e, random.Random(123).random())  # explicit seed honored
+        # restored: unseeded instances differ again
+        self.assertNotEqual(random.Random().random(), random.Random().random())
+
+    def test_equality_re_match_lockstep(self):
+        import re
+
+        from probe.equality import equal
+        self.assertTrue(equal(re.match("a(b)", "ab"), re.match("a(b)", "ab")))
+        self.assertFalse(equal(re.match("a", "a"), re.match("z", "z")))
+
+
 class TestAdjudicator(unittest.TestCase):
     def test_parse_assume(self):
         from probe.adjudicate import _parse_assume

@@ -237,10 +237,12 @@ counts. `_Controlled`:
 - I/O routed through the recorded `Effects` shim (`probe/effects.py`) stays
   verifiable.
 
-**Known, documented gaps** (surface as `unverifiable`, never as false
-confidence): a reference captured at import (`from datetime import datetime`) and
-per-instance `random.Random(...)` are *not* intercepted; C-level entropy/time in
-extensions is not intercepted.
+**Coverage of import-bound references** (v0.3+): `from datetime import
+datetime/date` references captured at import are frozen across all loaded modules
+(identity scan), and unseeded `random.Random()` instances are made deterministic.
+**Remaining, documented gaps** (surface as `unverifiable`, never as false
+confidence): aliased datetime imports (`... as dt`), and C-level entropy/time
+inside extensions, are not intercepted.
 
 Equivalence of two observations — `replay._same(a, b)`:
 - exception-ness must match; if both raised, exception **type names** must match;
