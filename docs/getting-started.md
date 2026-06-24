@@ -120,6 +120,7 @@ See **[Configuration](configuration.md)** for all options.
 
 ## Next steps
 
-- [AI workflows](ai-workflows.md) — the snapshot/drift loop and the pytest plugin.
+- [AI workflows](ai-workflows.md) — the snapshot/drift loop, the pytest plugin, and proving
+  whether an assumption is load-bearing (`adjudicate`).
 - [Command reference](commands.md) — every command and flag.
 - [Limitations](limitations.md) — what a green result does and doesn't promise.

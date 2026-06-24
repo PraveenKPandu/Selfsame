@@ -39,7 +39,12 @@ shim, or make the function deterministic, to bring it back into scope.
 ## Stateful objects and cross-version drift
 
 - Objects are compared by an observable public snapshot when one exists, otherwise by private
-  `__dict__`/`__slots__` state; objects with no safe view are refused, not guessed.
+  `__dict__`/`__slots__` state. An object with an empty-but-present `__dict__`/`__slots__` is
+  *empty state* (comparable); only an object with **no** introspectable state at all (e.g.
+  `object()`, some C types) is refused — never guessed.
+- Common value types — `datetime`/`date`/`time`/`timedelta`, `Decimal`, `complex`, `Fraction`,
+  `Path`, `re.Match`/`Pattern` — are compared by their **observable form** (and so is any
+  object/dict/list that contains them).
 - Comparing a **captured object across versions** relies on it pickling in one version and
   reconstructing in the other. If a class's internal layout changes a lot between versions
   (e.g. across many commits), the captured `self` may not reconstruct — reported as `error`,
@@ -50,9 +55,11 @@ shim, or make the function deterministic, to bring it back into scope.
 ## Determinism control is broad but bounded
 
 The harness freezes the clock and seeds entropy (`time.*`, `datetime.now/utcnow/today`,
-`random`, `os.urandom`, `uuid`, `secrets`). It **cannot** intercept a reference captured at
-import (`from datetime import datetime`) or a per-instance `random.Random(...)`; those surface
-as `unverifiable`, never as silent false confidence.
+`random`, `os.urandom`, `uuid`, `secrets`). It also freezes `from datetime import
+datetime/date` references captured at import across loaded modules, and makes unseeded
+`random.Random()` instances deterministic. It still **cannot** intercept an aliased import
+(`from datetime import datetime as dt`) or C-level time/entropy inside an extension; those
+surface as `unverifiable`, never as silent false confidence.
 
 ## Operational notes
 
@@ -67,6 +74,17 @@ as `unverifiable`, never as silent false confidence.
 - **`drift --changed-only`** replays only *directly* changed functions, so a divergence in an
   unchanged caller of a changed callee can be missed — run full `drift` periodically to be
   exhaustive.
+
+## Assumption adjudicator (experimental)
+
+`selfsame adjudicate` ([docs](adjudicator.md)) is **experimental** and has its own boundaries:
+
+- It is a **judge, not a detective** — it adjudicates assumptions *you nominate*, it does not
+  discover them. Enumeration (symbol resolution, linters) is deliberately out of the core.
+- A `not-load-bearing` result is scoped to the captured inputs and the tried violations, and
+  only meaningful if the boundary was actually invoked — the report flags `boundary not
+  invoked` when a nomination never took effect (so it can't masquerade as "tolerant").
+- It proves *load-bearingness*, not *correctness* — same as the rest of the tool.
 
 ## Not yet / out of scope
 

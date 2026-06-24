@@ -40,19 +40,26 @@ Behavior is compared **structurally**, not by `repr()`:
 
 - Atomics handle the awkward cases (`nan`, `-0.0`); containers are order-normalized for
   sets/dicts.
+- Common value types — `datetime`/`date`/`time`/`timedelta`, `Decimal`, `complex`, `Fraction`,
+  `Path`, `re.Match`/`Pattern`, and the `NotImplemented`/`Ellipsis` singletons — are compared
+  by their **observable form** (e.g. a datetime by its isoformat + fold + tzname). Because the
+  form recurses, any object/dict/list that *contains* them is comparable too.
 - Callables and classes are identified by `module`+`qualname`, so caches that store functions
   compare correctly.
 - Lazy iterators/generators are materialized up to `PROBE_ITER_CAP` and compared as the
   sequence they yield; beyond the cap they're refused as opaque.
 - Stateful objects are compared by an **observable, side-effect-free** public snapshot when
   one exists (e.g. a Sequence's contents), otherwise by their private `__dict__`/`__slots__`
-  state — and if neither can be read safely, they're refused rather than guessed.
+  state. An empty-but-present `__dict__` is *empty state* (comparable), so methods on
+  stateless receivers are verifiable; only an object with **no** introspectable state at all
+  is refused.
 - For methods, the **post-call `self`** is part of the verdict, so a refactor that changes how
   a method mutates its receiver is caught.
 
 Determinism is enforced before comparison: each input is run twice and, under a controlled
-harness (frozen clock, seeded entropy), checked for agreement. If the two runs disagree, the
-input is nondeterministic and the function is refused.
+harness (frozen clock, seeded entropy — including `from datetime import datetime` references
+and unseeded `random.Random()` instances), checked for agreement. If the two runs disagree,
+the input is nondeterministic and the function is refused.
 
 ## The soundness model
 
@@ -102,5 +109,24 @@ from your tests, not from guessing.
   post-call receiver state can be read.
 - Each version runs in its own subprocess from its own worktree/snapshot — true version
   isolation, contained crashes.
+- Workers compile the target from **current source**, never a stale `.pyc` — so replaying
+  against a live working tree (drift/snapshot) right after an edit is reliable even when the
+  edit is the same byte-size and lands in the same mtime-second.
+
+## The same engine, four input sources
+
+Capture → compare is one engine; what differs is where the inputs (and the "other side")
+come from:
+
+| mode | what it varies | the "other side" |
+|---|---|---|
+| `verify` | the **code** (two git refs) | base worktree |
+| `drift` | the **code** (vs an accepted build) | a frozen snapshot file |
+| `fuzz` *(experimental)* | the **inputs** (mutated from captures) | the other version |
+| `adjudicate` *(experimental)* | an **assumption** (a violated dependency) | the same code's own baseline |
+
+All four feed the same canonical comparator and the same soundness model, so every verdict
+carries the same zero-false-confidence guarantee. See
+[AI workflows](ai-workflows.md) and [adjudicator.md](adjudicator.md).
 
 Next: [Limitations](limitations.md) — the boundaries of all this.

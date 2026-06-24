@@ -188,7 +188,7 @@ Every form is a list whose first element is a tag:
 | `singleton` | `["singleton", "NotImplemented" \| "Ellipsis"]` | |
 | `iter` | `["iter", [c,...]]` | lazy iterators, materialized ≤ `_ITER_CAP` |
 | `pub-obj` | `["pub-obj", classqualname, snapshot]` | public Sequence/Set contents + public attrs |
-| `obj` | `["obj", classqualname, c(state)]` | private `__dict__`/`__slots__` state |
+| `obj` | `["obj", classqualname, c(state)]` | private `__dict__`/`__slots__` state; empty-but-present state ⇒ comparable empty state |
 | `opaque` | `["opaque", classqualname, "<unrepresentable>"]` ; `["opaque", "iterator-truncated"]` | **refused** downstream |
 | `maxdepth` | `["maxdepth"]` | depth > `_MAX_DEPTH` |
 
@@ -203,6 +203,10 @@ Rules that protect soundness:
   canonicalized must fall through, never crash a run.
 - **Mappings are excluded** from the `pub-obj` public-snapshot path (their
   `__getitem__` can mutate caches); they fall back to `obj`/`opaque`.
+- **Empty state is state.** An object with a present-but-empty `__dict__`/`__slots__`
+  canonicalizes to `obj` with empty state (so methods on stateless receivers are
+  verifiable); only an object with *no* introspectable state at all (`object()`,
+  some C types) becomes `opaque`. `equality.py` mirrors this.
 - An `opaque` anywhere in a value's tree makes the enclosing return/state
   unverifiable (`_has_opaque` walks the form).
 
@@ -334,6 +338,7 @@ code on their own.
 | `generators.py` | type-hint input generation (legacy `check`) |
 | `check.py` · `runner.py` · `model.py` | generation-based `check`; corpus demo; `Unit` dataclass |
 | `fuzz.py` · `_cgfuzz_worker.py` · `_fuzz_worker.py` · `_mutate.py` | **experimental** capture-seeded differential fuzzing |
+| `adjudicate.py` · `_adjudicate_worker.py` | **experimental** assumption adjudicator (§9): holds code fixed, violates a nominated boundary, judges load-bearingness; writes `.selfsame/assumptions.json` |
 
 ---
 
@@ -354,12 +359,21 @@ feeding the same `canonical` + `_same` + verdict model:
 2. **generated** (type hints) — weak; legacy `check`.
 3. **mutated** (havoc/coverage-guided) — experimental `fuzz`.
 
-A new source (e.g. *perturbed values at a nominated dependency boundary* — the
-assumption adjudicator) is a **fourth input source**: it produces observations
-from the same worker/harness/canonical machinery, and its result is judged by the
-same soundness model and serialized into a **distinct** report section. Keep any
-*enumeration* of what to perturb out of the core (heuristic); the core only
-*adjudicates* nominated candidates. See the design in
+The **assumption adjudicator** (`adjudicate.py`, experimental, now built) is the
+**fourth input source**: instead of varying the code or the inputs, it holds both
+fixed and *perturbs a value at a nominated dependency boundary*. `_adjudicate_worker`
+establishes a baseline (boundary normal, also recording its return types so the
+`wrong-type` violation is a genuine mismatch), then for each violation in
+`{none, raises, wrong-type, zero, negative}` re-runs the captured inputs with the
+boundary monkeypatched and compares canonically via the same `_unsound`/`_same`/
+`_simpler`/`_minimize` helpers imported from `replay.py`. Its verdicts —
+`load-bearing` / `not-load-bearing` / `unverifiable` — map onto the same soundness
+model (an unsound baseline ⇒ the whole candidate is `unverifiable`, never guessed),
+and it serializes to a **distinct** report (`.selfsame/assumptions.json` + `.md`),
+not the drift `report.json`. The orchestrator also reports `boundary not invoked`
+when a nomination never took effect, so `not-load-bearing` can't masquerade as
+"tolerant". Keep any *enumeration* of what to perturb out of the core (heuristic);
+the core only *adjudicates* nominated candidates. See the design in
 [adjudicator.md](adjudicator.md).
 
 **Known debt**
