@@ -182,6 +182,39 @@ the change was intended (then `snapshot` to bless it) or a regression (then fix 
 Relocate with `--report-dir`, or disable with `--no-report`. Also available:
 `--json-out path` and `--junit-xml path` for pipelines.
 
+## Proving a silent assumption is load-bearing (`adjudicate`, experimental)
+
+Drift answers "did behavior change?" The adjudicator answers a sharper question for
+AI-generated code: **this passes — but does the green secretly rest on something the model
+never verified?** LLM code routinely leans on an unstated belief (`fx_rate` "never returns
+None", a dict "has this key", a list "is ordered") it couldn't confirm under context limits.
+
+`selfsame adjudicate` is a **judge, not a detective**: you (or an agent/tool) *nominate* a
+candidate `(target, boundary)`; it holds the code fixed, deliberately violates the assumed
+contract at the boundary (returns `none`/`zero`/`negative`/`wrong-type`, or `raises`), re-runs
+on the captured inputs, and compares to the baseline:
+
+```bash
+selfsame adjudicate --assume target=myapp.billing::format_invoice,boundary=myapp.billing::fx_rate -- pytest -q
+```
+```
+! format_invoice  assumes  fx_rate   load-bearing
+    none   base 9.99 -> raises TypeError ...   @ (Order(currency='XYZ', amount=10),)
+    raises base 9.99 -> raises RuntimeError ...
+```
+
+- **load-bearing** — a violation changed the result (with a minimized witness). The passing
+  verdict was standing on this assumption.
+- **not-load-bearing** — the code already tolerates it; no noise. (If a nomination never took
+  effect, it says so: *boundary not invoked* — it can't masquerade as "tolerant".)
+- **unverifiable** — couldn't compare soundly (io/threads/nondeterminism/opaque) → refuses.
+
+Same three-state, zero-false-confidence model, pointed at a new axis. It uniquely *proves*
+load-bearingness — every AI-review tool guesses and drowns in false positives. Advisory by
+default (exit 0; `--fail-on-load-bearing` to gate), written to `.selfsame/assumptions.json`
+(a separate artifact from drift's `report.json`). Full design and the violation set:
+**[adjudicator.md](adjudicator.md)**.
+
 ## Where AI workflows fit — and where they don't
 
 **Great fit**

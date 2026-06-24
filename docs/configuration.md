@@ -35,6 +35,7 @@ selfsame: 3 equivalent · 1 divergent · 0 interface-change · 0 unverifiable ·
 |---|---|
 | `.selfsame/report.json` | `schema`, `environment`, `summary`, `results[]` (per-function: `verdict`, `file`, `line`, `base`, `head`, witness, `minimized`, soundness `reason`), and `unverified_changed[]` |
 | `.selfsame/report.md` | the same, structured for an LLM to read |
+| `.selfsame/assumptions.json` + `.md` | *(experimental)* `adjudicate` output — per nominated `(target, boundary)`: the `load-bearing`/`not-load-bearing`/`unverifiable` verdict per violation, witness, and `boundary_invoked` |
 
 - `--report-dir <dir>` — write the report somewhere else.
 - `--no-report` — don't write the default files.

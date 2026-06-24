@@ -21,6 +21,7 @@ feature works, but the old ones quietly broke."
 - 🧪 **Inputs are real, not generated** — recorded from your own test suite or app run. No type hints required; methods, packages, and relative imports just work.
 - 🔒 **Sound by construction** — uncontrolled I/O, threads, nondeterminism, and opaque values are refused, never certified.
 - 🤖 **Built for AI-driven development** — freeze an accepted build, then measure how far each generated change drifts from it. No second git branch needed.
+- 🎯 **Proves assumptions are load-bearing** *(experimental)* — `adjudicate` violates a nominated dependency boundary and shows whether the passing result secretly depended on it. A judge, not a guesser.
 - 📄 **Agent-consumable reports** — every run drops `.selfsame/report.json` + Markdown with `file:line`, before→after witnesses, and what was *not* covered.
 - 🪶 **Pure standard library** — no runtime dependencies. `pip install` and go.
 
@@ -111,6 +112,7 @@ silently become the new "correct" behavior — you bless a new baseline explicit
 | `selfsame attach`   | dump captures from a running, hook-enabled process without stopping it |
 | `selfsame check`    | generate inputs and check two files / git refs (for typed, pure functions) |
 | `selfsame fuzz`     | *(experimental)* mutate real inputs to find divergences your tests miss |
+| `selfsame adjudicate` | *(experimental)* prove whether a nominated assumption is load-bearing on passing code |
 
 Full reference with every flag: **[docs/commands.md](docs/commands.md)**.
 
