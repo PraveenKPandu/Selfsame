@@ -189,10 +189,18 @@ def _simpler(v):
         out += [{}]
     elif isinstance(v, bool):
         pass
-    elif isinstance(v, int) and v not in (0,):
-        out += [0, v // 2]
-    elif isinstance(v, float) and v == v and v not in (0.0,):
-        out += [0.0]
+    elif isinstance(v, int) and v not in (0, 1, -1):
+        # shrink magnitude toward +/-1, never to 0 — reducing to 0 tends to
+        # manufacture a degenerate witness (e.g. base 0 vs head 0.0, a type-only
+        # divergence). A genuine 0 captured input is still kept as-is.
+        half = v // 2
+        if half not in (0, v):
+            out += [half]
+        out += [1 if v > 0 else -1]
+    elif isinstance(v, float) and v == v and v != 0.0:
+        half = v / 2.0
+        if half != 0.0:
+            out += [half]
     return out
 
 

@@ -1035,10 +1035,20 @@ class TestDivergenceDetail(unittest.TestCase):
     def test_simpler_shrinks_each_type(self):
         from probe.replay import _simpler
         self.assertIn("", _simpler("hello"))
-        self.assertIn(0, _simpler(40))
         self.assertEqual(_simpler(0), [])          # already minimal
         self.assertEqual(_simpler(True), [])       # bools aren't shrunk
         self.assertTrue(any(x == [] for x in _simpler([1, 2, 3])))
+
+    def test_simpler_numbers_shrink_but_never_to_zero(self):
+        # reducing to 0 manufactures degenerate witnesses (0 vs 0.0); shrink
+        # magnitude toward +/-1 instead, and keep a real 0 as already-minimal.
+        from probe.replay import _simpler
+        self.assertNotIn(0, _simpler(40))
+        self.assertTrue(_simpler(40))              # still shrinks
+        self.assertEqual(_simpler(1), [])          # floor: no 0
+        self.assertEqual(_simpler(-1), [])
+        self.assertNotIn(0.0, _simpler(8.0))
+        self.assertEqual(_simpler(0.0), [])
 
 
 class TestBlindSpot(unittest.TestCase):
@@ -1575,6 +1585,14 @@ class TestAdjudicator(unittest.TestCase):
         unv = {"violations": [{"result": "unverifiable", "reason": "opaque-return"}]}
         self.assertEqual(_candidate_verdict(unv)[0], "unverifiable")
         self.assertEqual(_candidate_verdict({"error": "boom"})[0], "unverifiable")
+
+    def test_wrong_type_value_is_shape_aware(self):
+        from probe._adjudicate_worker import _make_stub, _wrong_type_value
+        self.assertIsInstance(_wrong_type_value({"str"}), int)      # str-ret -> int
+        self.assertIsInstance(_wrong_type_value({"int"}), str)      # num-ret -> str
+        self.assertIsInstance(_wrong_type_value({"list"}), int)     # container -> int
+        # the stub uses the precomputed wrong value
+        self.assertEqual(_make_stub("wrong-type", [0], 999)(), 999)
 
     def test_violation_stubs(self):
         from probe._adjudicate_worker import _make_stub
