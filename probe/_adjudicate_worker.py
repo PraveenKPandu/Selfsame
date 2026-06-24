@@ -24,8 +24,19 @@ import json
 import os
 import pickle
 import sys
+import tempfile
 
 _WRONG_TYPE = "selfsame::wrong-type"
+
+
+def _fresh_bytecode():
+    """Compile the target from current source, never a stale .pyc (see
+    probe/_replay_worker.py for why this matters on a live working tree)."""
+    try:
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = tempfile.mkdtemp(prefix="probe_pyc_")
+    except Exception:
+        pass
 
 
 def _make_stub(violation, counter):
@@ -50,6 +61,7 @@ def _make_stub(violation, counter):
 
 
 def main() -> int:
+    _fresh_bytecode()
     job = json.load(sys.stdin)
     out = {"loaded": False, "error": None, "boundary_invoked": False,
            "violations": []}

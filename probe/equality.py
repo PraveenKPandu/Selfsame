@@ -36,6 +36,14 @@ def _callable_id(v: Any):
             getattr(v, "__qualname__", getattr(v, "__name__", "?")))
 
 
+def _has_opaque(node: Any) -> bool:
+    if isinstance(node, list):
+        if node and node[0] == "opaque":
+            return True
+        return any(_has_opaque(x) for x in node)
+    return False
+
+
 def _slots_state(obj: Any):
     names = []
     for cls in type(obj).__mro__:
@@ -149,5 +157,17 @@ def equal(a: Any, b: Any, _depth: int = 0) -> bool:
     # the repr-address false-divergence.
     sa, sb = _state(a), _state(b)
     if sa is None or sb is None:
+        # Last resort for value types with neither a custom __eq__ nor
+        # introspectable state (e.g. re.Match/re.Pattern): compare by the
+        # canonical OBSERVABLE form, in lockstep with the cross-process
+        # comparator. Only trusted when canonical is non-opaque — otherwise we
+        # cannot prove equality, so we don't claim it.
+        try:
+            from .canonical import canonical
+            ca, cb = canonical(a), canonical(b)
+            if not _has_opaque(ca) and not _has_opaque(cb):
+                return ca == cb
+        except Exception:
+            pass
         return False  # opaque; cannot prove equal, so don't claim it
     return equal(sa, sb, _depth + 1)

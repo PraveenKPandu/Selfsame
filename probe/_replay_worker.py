@@ -18,6 +18,23 @@ import json
 import os
 import pickle
 import sys
+import tempfile
+
+
+def _fresh_bytecode():
+    """Force the target to compile from current source, never a stale .pyc.
+
+    When replaying against a live working tree (drift/snapshot), a prior import
+    (e.g. the capture run) may have written a .pyc, and a same-size edit landing
+    in the same mtime-second leaves Python's mtime+size cache unable to tell the
+    bytecode is stale — so it would import the OLD code. Redirecting the pyc
+    cache to an empty dir and disabling pyc writes makes every worker compile the
+    worktree source fresh."""
+    try:
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = tempfile.mkdtemp(prefix="probe_pyc_")
+    except Exception:
+        pass
 
 
 def _resolve(module, qualname):
@@ -28,6 +45,7 @@ def _resolve(module, qualname):
 
 
 def main() -> int:
+    _fresh_bytecode()
     job = json.load(sys.stdin)
     out = {"loaded": False, "error": None, "obs": []}
     try:

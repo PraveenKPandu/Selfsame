@@ -16,11 +16,12 @@ Pipeline per unit:
                     behavioral divergence.
 
 The controlled environment freezes a broad set of clock sources and seeds a broad
-set of entropy sources. It is deliberately honest about its limits: the
-`from datetime import datetime` capture-at-import pattern cannot be intercepted
-globally, and per-instance `random.Random(...)` objects keep their own state.
-Those gaps surface as `uncontrolled-time` / `uncontrolled-entropy` verdicts
-rather than silent false confidence.
+set of entropy sources. It also closes two former gaps: `from datetime import
+datetime/date` references captured at import time are frozen across all loaded
+modules (by identity to the real class — unusual aliases like `... as dt` are the
+remaining edge), and unseeded `random.Random()` instances are made deterministic
+(an explicit seed is honored). Anything still uncontrollable surfaces as a
+nondeterminism verdict rather than silent false confidence.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ import os
 import random
 import secrets
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -116,10 +118,10 @@ class _Controlled:
                 self._saved[("time", name)] = getattr(time, name)
                 setattr(time, name, fn)
 
-        # datetime: best-effort. Patches `datetime.datetime`/`datetime.date` on
-        # the module so `import datetime; datetime.datetime.now()` is frozen.
-        # Cannot catch `from datetime import datetime` (reference captured at
-        # import) — that path stays live and will trip the time classifier.
+        # datetime: patch `datetime.datetime`/`datetime.date` on the module so
+        # `import datetime; datetime.datetime.now()` is frozen. `from datetime
+        # import datetime` references in other modules are also frozen by the
+        # identity scan below.
         self._saved["dt.datetime"] = _datetime.datetime
         self._saved["dt.date"] = _datetime.date
 
@@ -149,6 +151,27 @@ class _Controlled:
 
         _datetime.datetime = _FrozenDateTime
         _datetime.date = _FrozenDate
+
+        # Also freeze `from datetime import datetime/date` references that other
+        # modules captured at import time — patching `datetime.datetime` alone
+        # misses those (they hold their own binding). Scan by identity to the real
+        # class so aliases via the common names are caught; restored on exit.
+        real_dt = self._saved["dt.datetime"]
+        real_date = self._saved["dt.date"]
+        self._dt_refs = []
+        for _mod in list(sys.modules.values()):
+            md = getattr(_mod, "__dict__", None)
+            if not isinstance(md, dict):
+                continue
+            try:
+                if md.get("datetime") is real_dt:
+                    self._dt_refs.append((md, "datetime", real_dt))
+                    md["datetime"] = _FrozenDateTime
+                if md.get("date") is real_date:
+                    self._dt_refs.append((md, "date", real_date))
+                    md["date"] = _FrozenDate
+            except Exception:
+                continue
 
         # --- entropy sources (seed so the sequence is identical each run) ---
         random.seed(0)
@@ -185,6 +208,25 @@ class _Controlled:
         self._saved["random_urandom"] = getattr(random, "_urandom", None)
         if hasattr(random, "_urandom"):
             random._urandom = det_urandom
+
+        # Per-instance `random.Random()` with no seed pulls system entropy at the
+        # C level, bypassing random._urandom — so an unseeded instance is still
+        # nondeterministic. Make unseeded init/seed deterministic (an explicit
+        # seed is honored). Patch the methods in place so isinstance() is
+        # unaffected. SystemRandom overrides seed, so it keeps using os.urandom.
+        self._saved["Random_init"] = random.Random.__init__
+        self._saved["Random_seed"] = random.Random.seed
+        _real_init = self._saved["Random_init"]
+        _real_seed = self._saved["Random_seed"]
+
+        def det_random_init(rself, x=None):
+            _real_init(rself, 0 if x is None else x)
+
+        def det_random_seed(rself, a=None, version=2):
+            _real_seed(rself, 0 if a is None else a, version)
+
+        random.Random.__init__ = det_random_init
+        random.Random.seed = det_random_seed
 
         # uuid: deterministic sequence + counted.
         self._saved["uuid4"] = uuid.uuid4
@@ -269,6 +311,11 @@ class _Controlled:
                 setattr(time, name, self._saved[("time", name)])
         _datetime.datetime = self._saved["dt.datetime"]
         _datetime.date = self._saved["dt.date"]
+        for md, name, orig in getattr(self, "_dt_refs", []):
+            try:
+                md[name] = orig
+            except Exception:
+                pass
         for key, val in self._saved.items():
             if isinstance(key, tuple) and key[0] in ("random", "secrets"):
                 setattr(globals()[key[0]] if key[0] == "secrets" else random,
@@ -276,6 +323,8 @@ class _Controlled:
         os.urandom = self._saved["urandom"]
         if self._saved.get("random_urandom") is not None:
             random._urandom = self._saved["random_urandom"]
+        random.Random.__init__ = self._saved["Random_init"]
+        random.Random.seed = self._saved["Random_seed"]
         uuid.uuid4 = self._saved["uuid4"]
         uuid.uuid1 = self._saved["uuid1"]
         threading.Thread.start = self._saved["thread_start"]

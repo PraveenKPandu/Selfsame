@@ -747,3 +747,40 @@ Known MVP wart: witness minimization can over-reduce a numeric witness to a
 degenerate `0` vs `0.0` case (sound, just less illustrative). Deferred to v0.3.x
 along with shape-aware violations (`empty`/`missing-key`/`reordered`), candidate
 ranking, and an optional out-of-core heuristic candidate proposer.
+
+## 25. Nondeterminism lever + a stale-bytecode bug it uncovered
+
+Two coverage levers on the harness, plus a real pre-existing bug the work exposed.
+
+**Nondeterminism lever** (`probe/harness.py`). The `_Controlled` determinism
+harness froze `import datetime; datetime.now()` but not `from datetime import
+datetime` references (captured at import in other modules), and unseeded
+`random.Random()` instances seed at the C level (bypassing the `random._urandom`
+patch). Both now closed: an identity scan over `sys.modules` freezes
+`from datetime import datetime/date` bindings across loaded modules, and
+`random.Random.__init__`/`.seed` are patched in place so unseeded instances are
+deterministic (explicit seeds honored; methods patched in place so isinstance is
+unaffected; SystemRandom already covered via os.urandom). Sound: both versions get
+the identical frozen/seeded environment, so this only converts nondeterminism
+*noise* into comparable runs — it can't manufacture a false verdict. Remaining
+gaps (aliased `import ... as`, C-level extension entropy) still surface as
+`unverifiable`. Verified frozen + restored.
+
+**equality.py lockstep** (`probe/equality.py`). The in-process comparator already
+handled datetime/Decimal/Path via real `__eq__`; the gap was identity-`__eq__`
+value types (re.Match/Pattern). Added a final fallback that defers to
+`canonical()` when it produces a non-opaque form — bringing the in-process path
+into lockstep with the cross-process comparator without disturbing the hot paths.
+
+**Stale-bytecode robustness (pre-existing bug)** (`probe/_replay_worker.py`,
+`probe/_adjudicate_worker.py`). Investigating a flaky test revealed it was NOT the
+harness change (it reproduced 4/12 on unmodified code): when replaying against a
+*live working tree* (drift/snapshot), a prior import (the capture run) writes a
+`.pyc`, and a same-size edit landing in the same mtime-second leaves Python's
+mtime+size cache unable to detect the stale bytecode — so the worker imports the
+OLD code and reports a real change as `equivalent`. This is a soundness-adjacent
+bug for fast edit→drift loops (exactly the AI-agent cadence). Fix: workers set
+`sys.dont_write_bytecode = True` and redirect `sys.pycache_prefix` to a fresh
+empty dir, forcing a fresh compile of the worktree source every time. Confirmed:
+0/15 stale reads after the fix; the previously-flaky drift test is now stable
+across many runs. Suite 122 -> 125.
