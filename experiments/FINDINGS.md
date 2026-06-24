@@ -813,3 +813,23 @@ fix the method becomes load-bearing as expected. Suite 125 -> 126.
 
 Remaining known warts (v0.3.x): witness minimization can over-reduce to a
 degenerate case; `wrong-type` uses a generic str sentinel (shape-aware later).
+
+## 27. Adjudicator wart fixes (witness quality + shape-aware wrong-type)
+
+Cleared the two §26 warts.
+
+- **Witness minimization no longer over-reduces to a degenerate case.**
+  `_simpler` (shared by replay divergence-minimization and the adjudicator) used
+  to offer `0`/`0.0`, which manufactured type-only witnesses (base `0` vs head
+  `0.0`). It now shrinks magnitude toward ±1 and never proposes `0` — a genuine
+  `0` captured input is still kept as-is. Witnesses went from `(0,)` to clean
+  `(1,)`/`('',)`.
+- **`wrong-type` is now shape-aware.** The baseline run records the boundary's
+  real return type (a recording wrapper over the original), and the `wrong-type`
+  stub injects a value of a *different* category (str-return → int, number → str,
+  container → int) instead of a fixed str sentinel — so it's a true type mismatch.
+  Verified: a str-returning boundary now gets an int violation → `'int' object has
+  no attribute 'upper'`, a real mismatch.
+
+Both verified on the adversarial repo and a real one; soundness unchanged. +2
+tests, suite 126 -> 128.

@@ -39,7 +39,20 @@ def _fresh_bytecode():
         pass
 
 
-def _make_stub(violation, counter):
+def _wrong_type_value(seen_types):
+    """A value whose type differs from what the boundary normally returns, so the
+    'wrong-type' violation is a genuine type mismatch (shape-aware) rather than a
+    fixed sentinel that might coincide with the real return type."""
+    if seen_types & {"str", "bytes", "bytearray"}:
+        return 1234567
+    if seen_types & {"int", "float", "complex", "bool", "Decimal", "Fraction"}:
+        return _WRONG_TYPE
+    if seen_types & {"list", "tuple", "dict", "set", "frozenset"}:
+        return 1234567
+    return _WRONG_TYPE   # default: a str (wrong for most non-str returns)
+
+
+def _make_stub(violation, counter, wrong_value=_WRONG_TYPE):
     """A deterministic callable that replaces the boundary and emits a violation
     of the assumed contract. `counter` records that the boundary was reached."""
     def stub(*args, **kwargs):
@@ -55,7 +68,7 @@ def _make_stub(violation, counter):
         if violation == "empty":
             return ""
         if violation == "wrong-type":
-            return _WRONG_TYPE
+            return wrong_value
         return None
     return stub
 
@@ -142,10 +155,22 @@ def main() -> int:
             print(json.dumps(out))
             return 0
 
-        # Baseline (boundary normal). If we can't soundly establish the baseline,
-        # the whole candidate is unverifiable — never guess.
-        setattr(bmod, bname, orig)
-        base_obs = [observe(v) for v in values_list]
+        # Baseline (boundary normal), recording the boundary's return types so the
+        # 'wrong-type' violation can be a genuine mismatch. If we can't soundly
+        # establish the baseline, the whole candidate is unverifiable — never guess.
+        seen_types = set()
+
+        def _recorder(*a, **k):
+            r = orig(*a, **k)
+            seen_types.add(type(r).__name__)
+            return r
+
+        setattr(bmod, bname, _recorder)
+        try:
+            base_obs = [observe(v) for v in values_list]
+        finally:
+            setattr(bmod, bname, orig)
+        wrong_value = _wrong_type_value(seen_types)
         base_flag = _unsound(base_obs)
         if base_flag:
             out["violations"].append({"violation": "*", "result": "unverifiable",
@@ -190,7 +215,7 @@ def main() -> int:
             return cur
 
         for violation in job["violations"]:
-            stub = _make_stub(violation, counter)
+            stub = _make_stub(violation, counter, wrong_value)
             pert_obs = [perturbed_obs(v, stub) for v in values_list]
             flag = _unsound(pert_obs)
             if flag:

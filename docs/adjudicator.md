@@ -6,19 +6,16 @@
 > confidently-wrong). This document specifies it against the engine contract in
 > [architecture.md](architecture.md); section references below (§N) point there.
 >
-> **MVP scope shipped:** violations `none`/`raises`/`wrong-type`/`zero`/`negative`;
-> CLI (`--assume`) + `.selfsame/assumptions.toml` nomination; baseline from a test
-> command or `--snapshot`; in-worker witness minimization; report written to
-> `.selfsame/assumptions.json` + `.md` (a **separate artifact** from verify/drift's
-> `report.json`, to keep the two blindspot types distinct — see §3); advisory exit
-> (`--fail-on-load-bearing` to gate). **Deferred (v0.3.x):** shape-aware
-> `empty`/`missing-key`/`reordered`, candidate ranking, an out-of-core heuristic
-> proposer.
->
-> **Known MVP limitation:** witness minimization can over-reduce a numeric witness
-> to a degenerate case (e.g. `amount=0`, where the divergence is only `0` vs `0.0`).
-> The verdict stays sound; the witness is just less illustrative. Tracked for
-> v0.3.x.
+> **MVP scope shipped:** violations `none`/`raises`/`wrong-type`/`zero`/`negative`
+> (`wrong-type` is **shape-aware** — it records the boundary's real return type in
+> the baseline and injects a different one); CLI (`--assume`) +
+> `.selfsame/assumptions.toml` nomination; baseline from a test command or
+> `--snapshot`; in-worker witness minimization (shrinks toward ±1, never to a
+> degenerate `0`/`0.0`); report written to `.selfsame/assumptions.json` + `.md` (a
+> **separate artifact** from verify/drift's `report.json`, to keep the two
+> blindspot types distinct — see §3); advisory exit (`--fail-on-load-bearing` to
+> gate). **Deferred (v0.3.x):** shape-aware `empty`/`missing-key`/`reordered`,
+> candidate ranking, an out-of-core heuristic proposer.
 
 ## 1. What it is — in one sentence
 
@@ -182,10 +179,13 @@ violations matter).
 | `missing-key` *(v0.3.x)* | baseline dict minus one key | "this key is present" |
 | `reordered` *(v0.3.x)* | baseline sequence reversed | "ordering is stable" |
 
-`empty`/`missing-key`/`reordered` are **shape-aware**: they read the baseline
-return value to construct a faithful violation (e.g. only apply `reordered` if the
-boundary returned a sequence). MVP (v0.3.0) ships the shape-free ones (`none`,
-`raises`, `wrong-type`, `zero`/`negative`); shape-aware ones follow in v0.3.x.
+`wrong-type` is **shape-aware**: the baseline run records the boundary's real
+return type and `wrong-type` injects a value of a *different* category (str-return
+→ int, number-return → str, etc.), so it's a genuine mismatch rather than a fixed
+sentinel that might coincide with the real type. `empty`/`missing-key`/`reordered`
+are deeper shape-aware violations that reconstruct from the baseline return value
+(e.g. only apply `reordered` if the boundary returned a sequence) — they follow in
+v0.3.x. MVP (v0.3.0) ships `none`/`raises`/`wrong-type`/`zero`/`negative`.
 
 ## 8. Verdict & output
 
@@ -293,8 +293,9 @@ the witnesses. Contrast: if the code were `rate = fx_rate(...) or 1.0`, the
 - **Broad except in the target** swallows perturbations → reports
   not-load-bearing. This is *correct* by the behavioral definition, but may
   surprise; document it.
-- **Shape-aware violations** need to read the baseline return to construct a
-  faithful violation — adds a dependency on having observed it; defer to v0.3.x.
+- **Deeper shape-aware violations** (`empty`/`missing-key`/`reordered`) reconstruct
+  from the baseline return value; deferred to v0.3.x. (`wrong-type` is already
+  shape-aware via baseline return-type recording.)
 - **Candidate explosion** — many targets × boundaries × violations. Bound it
   (cap violations per candidate; reuse `_REPLAY_MAX_ARGS`-style limits) and lean
   on the advisory, ranked output rather than exhaustive runs.
