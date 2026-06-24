@@ -784,3 +784,32 @@ bug for fast edit→drift loops (exactly the AI-agent cadence). Fix: workers set
 empty dir, forcing a fresh compile of the worktree source every time. Confirmed:
 0/15 stale reads after the fix; the previously-flaky drift test is now stable
 across many runs. Suite 122 -> 125.
+
+## 26. Pressure-testing the adjudicator (and a coverage bug it found)
+
+Built an adversarial suite to stress the adjudicator's soundness, plus a
+real-repo run. Soundness held on every edge:
+
+- depends-on-value -> **load-bearing** (every violation, with witness);
+- calls boundary but swallows errors + ignores return -> **not-load-bearing**
+  (no false positive);
+- boundary never called, AND a wrong nomination (patching a `from x import f`
+  site the target doesn't use) -> **not-load-bearing + "boundary not invoked"** —
+  the honest flag, so a wrong nomination can't masquerade as "tolerant";
+- opaque return / uncontrolled I/O in the baseline -> **unverifiable** (refuses);
+- real repo: `slugify` proven **load-bearing** on its transliterator
+  (`text_unidecode.unidecode`) — None -> TypeError, raises -> propagates — on real
+  captured inputs.
+
+The one defect it surfaced was general (affects verify/drift, not just the
+adjudicator): a method on a **stateless receiver** (empty but present `__dict__`)
+canonicalized to `opaque`, so the method was refused `opaque-state` even though
+its return was comparable. Root cause: `canonical`/`equality` treated an empty
+`__dict__` as "no state" and fell to opaque. Fix: a present-but-empty `__dict__`
+(or `__slots__`) is EMPTY state, not "no state" — compare it as `["obj", cls,
+{}]`; only an object with neither (e.g. `object()`, C types) stays opaque. Sound:
+two stateless instances of the same class are observationally equal. After the
+fix the method becomes load-bearing as expected. Suite 125 -> 126.
+
+Remaining known warts (v0.3.x): witness minimization can over-reduce to a
+degenerate case; `wrong-type` uses a generic str sentinel (shape-aware later).

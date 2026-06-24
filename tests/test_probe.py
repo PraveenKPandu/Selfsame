@@ -1259,6 +1259,22 @@ class TestLeafValueTypes(unittest.TestCase):
 
         self.assertTrue("opaque" in repr(canonical(Opaque())))
 
+    def test_stateless_object_is_comparable_not_opaque(self):
+        # an instance with an empty (but present) __dict__ has EMPTY state, not
+        # "no state" — methods on stateless receivers must be comparable.
+        from probe.canonical import canonical
+        from probe.equality import equal
+
+        class Stateless:
+            pass
+
+        self.assertEqual(canonical(Stateless())[0], "obj")  # comparable, not opaque
+        self.assertEqual(canonical(Stateless()), canonical(Stateless()))  # equal
+        self.assertTrue(equal(Stateless(), Stateless()))
+        # object() (truly no __dict__) stays opaque / not-provably-equal
+        self.assertEqual(canonical(object())[0], "opaque")
+        self.assertFalse(equal(object(), object()))
+
 
 class TestExitCode(unittest.TestCase):
     def _rows(self, *verdicts):

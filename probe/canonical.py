@@ -245,11 +245,17 @@ def canonical(value: Any, _depth: int = 0) -> Any:
         return snap
 
     cls = type(value)
-    state = getattr(value, "__dict__", None)
-    if not state:
-        state = _slots_state(value)
-    if state:
-        return ["obj", cls.__qualname__, canonical(dict(state), _depth + 1)]
-    # No introspectable state: cannot be compared structurally. Tag uniquely so
-    # two opaque values never compare equal (forces an honest "can't tell").
+    d = getattr(value, "__dict__", None)
+    slots = _slots_state(value)
+    # An object with a real (even EMPTY) __dict__ or __slots__ is introspectable:
+    # compare it by that state. An empty __dict__ is empty state, NOT "no state"
+    # — two stateless instances of the same class are observationally equal, so a
+    # method on a stateless receiver must be comparable, not refused as opaque.
+    if isinstance(d, dict) or slots:
+        state = dict(d) if isinstance(d, dict) else {}
+        state.update(slots)
+        return ["obj", cls.__qualname__, canonical(state, _depth + 1)]
+    # No introspectable state at all (e.g. object(), some C types): cannot be
+    # compared structurally. Tag uniquely so two opaque values never compare
+    # equal (forces an honest "can't tell").
     return ["opaque", cls.__qualname__, "<unrepresentable>"]
