@@ -47,7 +47,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Run test suite
         working-directory: packages/node
-        run: node --test test/
+        run: node --test test/*.test.js
 
   lint:
     name: ruff
