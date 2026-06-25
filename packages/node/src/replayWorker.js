@@ -24,6 +24,10 @@ function readStdin() {
 }
 
 function resolveTarget(mod, qualname) {
+  // "(default)" -> the module's bare default function export.
+  if (qualname === '(default)') {
+    return typeof mod === 'function' ? { fn: mod, method: false } : null;
+  }
   // "foo" -> {fn: mod.foo}; "Class.method" -> {fn: proto.method, isMethod}
   if (qualname.includes('.')) {
     const [cls, method] = qualname.split('.');

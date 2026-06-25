@@ -6,7 +6,9 @@ const { same, unsound, hasOpaque, deepEqual } = require('./soundness');
 const { observe } = require('./harness');
 const { runCapture } = require('./capture');
 const { runReplay, summarize } = require('./replay');
+const { runVerify } = require('./verify');
 
 module.exports = {
-  canonical, same, unsound, hasOpaque, deepEqual, observe, runCapture, runReplay, summarize,
+  canonical, same, unsound, hasOpaque, deepEqual, observe,
+  runCapture, runReplay, runVerify, summarize,
 };

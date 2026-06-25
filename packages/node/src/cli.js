@@ -15,6 +15,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { runCapture } = require('./capture');
 const { runReplay, summarize } = require('./replay');
+const { runVerify } = require('./verify');
 
 const VERSION = require('../package.json').version;
 
@@ -59,6 +60,33 @@ function cmdReplay(args) {
     beforeRoot: path.resolve(flags.before),
     afterRoot: path.resolve(flags.after),
   });
+  return printRows(rows);
+}
+
+function cmdVerify(args) {
+  const { flags, rest } = parseFlags(args);
+  if (!flags.base || rest.length === 0) {
+    console.error('usage: selfsame verify --base <ref> [--head <ref>] [--root <dir>] -- <command...>');
+    return 2;
+  }
+  let res;
+  try {
+    res = runVerify({
+      cwd: process.cwd(), base: flags.base, head: flags.head,
+      root: flags.root || process.cwd(), command: rest,
+    });
+  } catch (e) {
+    console.error(`verify failed: ${e.message}`);
+    return 2;
+  }
+  if (res.capturedNothing) {
+    console.error('no captures produced — did the command import modules under --root?');
+    return 1;
+  }
+  return printRows(res.rows);
+}
+
+function printRows(rows) {
   let diverged = 0;
   for (const r of rows) {
     if (r.verdict === 'divergent') {
@@ -79,13 +107,15 @@ function cmdReplay(args) {
 
 function main(argv) {
   const [cmd, ...args] = argv;
+  if (cmd === 'verify') return cmdVerify(args);
   if (cmd === 'capture') return cmdCapture(args);
   if (cmd === 'replay') return cmdReplay(args);
   if (cmd === '--version' || cmd === '-v') { console.log(VERSION); return 0; }
   console.log('selfsame (JavaScript implementation of the Selfsame Protocol)\n');
   console.log('Commands:');
-  console.log('  capture --root <srcdir> --out <capdir> -- <command...>   record real inputs');
-  console.log('  replay  --before <dirA> --after <dirB> --captures <dir>  verify two versions');
+  console.log('  verify  --base <ref> [--head <ref>] [--root <dir>] -- <command...>   verify a refactor across git refs');
+  console.log('  capture --root <srcdir> --out <capdir> -- <command...>              record real inputs');
+  console.log('  replay  --before <dirA> --after <dirB> --captures <dir>             verify two directories');
   return cmd ? 2 : 0;
 }
 

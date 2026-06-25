@@ -17,9 +17,11 @@ All notable changes to this project are documented here. The format is based on
   Implements the Selfsame Protocol for the JS runtime: a JS-aware canonical form, the
   comparator and soundness gate (passing the cross-language conformance suite), a determinism
   harness (freezes `Date`/`Math.random`/`crypto`/timers, refuses uncontrolled I/O & threads),
-  and an end-to-end capture → replay → compare pipeline (`selfsame capture` / `selfsame
-  replay`) that catches real regressions. CommonJS capture; ESM and richer method support are
-  in progress. Zero runtime dependencies; Node ≥ 18.
+  and an end-to-end capture → replay → compare pipeline that catches real regressions.
+  Commands: `selfsame verify --base <ref> -- <cmd>` (git-worktree, base-vs-working-tree, the
+  recommended one-command flow), plus `selfsame capture` / `selfsame replay` (directory pair,
+  no git needed). Capture covers CommonJS named exports and bare default function exports; ESM
+  and richer method support are in progress. Zero runtime dependencies; Node ≥ 18.
 - **The Selfsame Protocol** (`SPEC/protocol.md`) — the language-neutral contract (canonical
   form, soundness rules, verdict model, report schema) that every language implementation
   must share, with JSON Schemas in `SPEC/schemas/`.
