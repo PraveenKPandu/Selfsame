@@ -21,17 +21,17 @@ jobs:
         working-directory: packages/node
     steps:
       - uses: actions/checkout@v7
-      # NOTE: deliberately NO `registry-url` here. setup-node's registry-url
-      # writes an .npmrc with `always-auth=true` + an empty NODE_AUTH_TOKEN, which
-      # forces blank-token auth and blocks npm's OIDC trusted-publishing exchange
-      # (symptom: provenance signs OK but the registry PUT 404s). Without it, npm
-      # publishes to the default registry and uses OIDC.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
-      # Trusted publishing + provenance need a recent npm (>= 11.5).
-      - run: npm install -g npm@latest
+      # OIDC trusted publishing needs npm >= 11.5 (Node 22 ships npm 10). With a
+      # new-enough npm, the OIDC exchange takes precedence over the empty token
+      # that setup-node's registry-url writes.
+      - run: |
+          npm install -g npm@latest
+          echo "node $(node --version) / npm $(npm --version)"
 
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
