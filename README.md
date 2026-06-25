@@ -34,11 +34,23 @@ feature works, but the old ones quietly broke."
 
 ## Install
 
+**Python** (reference implementation):
+
 ```bash
 pip install selfsame        # or: pipx install selfsame · uv tool install selfsame
 ```
 
 Installs the `selfsame` command (`probe` is a kept alias). Python 3.8+.
+
+**JavaScript / TypeScript** *(alpha)*:
+
+```bash
+npm install -g selfsame@next        # alpha is published under the `next` tag
+```
+
+Provides the `selfsame` command for JS/TS projects (`verify` / `snapshot` / `drift`). Node 18+.
+See [packages/node](packages/node/) for what's supported. Other languages: the
+[language roadmap](docs/languages.md).
 
 ## 60-second start
 

@@ -29,7 +29,8 @@ All notable changes to this project are documented here. The format is based on
   / `selfsame replay` (directory pair, no git needed). Every verdict-producing command writes
   an agent-consumable `.selfsame/report.json`. Capture covers CommonJS named exports and bare
   default function exports; ESM and richer method support are in progress. Zero runtime
-  dependencies; Node ≥ 18.
+  dependencies; Node ≥ 18. **Published to npm** as `selfsame` (alpha, under the `next` tag):
+  `npm install -g selfsame@next`.
 - **Java (JVM) comparator core** (`packages/java/`) — the third language, started. The
   canonical form, comparator, and soundness gate are implemented in pure JDK (incl. a tiny
   dependency-free JSON parser) and **pass the cross-language conformance suite**. Capture (a

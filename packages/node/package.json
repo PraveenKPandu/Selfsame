@@ -1,6 +1,6 @@
 {
   "name": "selfsame",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Sound behavior-equivalence verification for JavaScript/TypeScript refactors, using your own tests for inputs (Selfsame Protocol implementation)",
   "license": "MIT",
   "author": "PraveenKPandu",
