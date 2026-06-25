@@ -13,6 +13,11 @@ All notable changes to this project are documented here. The format is based on
   change for users.
 
 ### Added
+- **Per-package release pipelines.** Each language publishes independently on its own tag
+  prefix: Python `vX.Y.Z` → PyPI (existing), Node `node-vX.Y.Z` → npm via Trusted Publishing
+  + provenance (`release-node.yml`), Java `java-vX.Y.Z` → a GitHub Release with the built jar
+  (`release-java.yml`; Maven Central deferred until namespace + GPG setup). One-time setup and
+  cut steps are in `RELEASING.md`.
 - **JavaScript / TypeScript implementation** (`packages/node/`, alpha) — the second language.
   Implements the Selfsame Protocol for the JS runtime: a JS-aware canonical form, the
   comparator and soundness gate (passing the cross-language conformance suite), a determinism
