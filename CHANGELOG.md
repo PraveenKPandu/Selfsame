@@ -22,6 +22,11 @@ All notable changes to this project are documented here. The format is based on
   recommended one-command flow), plus `selfsame capture` / `selfsame replay` (directory pair,
   no git needed). Capture covers CommonJS named exports and bare default function exports; ESM
   and richer method support are in progress. Zero runtime dependencies; Node ≥ 18.
+- **Java (JVM) comparator core** (`packages/java/`) — the third language, started. The
+  canonical form, comparator, and soundness gate are implemented in pure JDK (incl. a tiny
+  dependency-free JSON parser) and **pass the cross-language conformance suite**. Capture (a
+  `-javaagent`), determinism control, and replay are not built yet — this is a conformant
+  comparator core, not yet a runnable `verify`. Java 17+, no runtime dependencies.
 - **The Selfsame Protocol** (`SPEC/protocol.md`) — the language-neutral contract (canonical
   form, soundness rules, verdict model, report schema) that every language implementation
   must share, with JSON Schemas in `SPEC/schemas/`.
