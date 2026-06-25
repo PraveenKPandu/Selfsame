@@ -43,12 +43,24 @@ Each version is checked out as a `git worktree` and run in its own process (with
 `node_modules` symlinked in). Exit code is non-zero on any divergence, so it drops into CI.
 Add `--head <ref>` to compare two refs instead of working-tree-vs-base.
 
+**No second branch? Freeze an accepted build, then measure drift** (the AI-velocity loop):
+
+```bash
+selfsame snapshot --root ./src -- node ./run-my-tests.js   # freeze behavior to .selfsame/snapshot.json
+# ... let an AI ship changes ...
+selfsame drift --root ./src                                # exit 1 if anything drifted
+```
+
 **Or two explicit steps** (no git needed) — capture, then replay two directories:
 
 ```bash
 selfsame capture --root ./src --out .selfsame -- node ./run-my-tests.js
 selfsame replay  --before ./old --after ./src --captures .selfsame
 ```
+
+Every verdict-producing command writes an agent-consumable `.selfsame/report.json`
+([schema](../../SPEC/schemas/report.schema.json)) — `--no-report` to skip, `--report <path>`
+to relocate.
 
 ## How it maps to the protocol
 

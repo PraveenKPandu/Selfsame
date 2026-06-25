@@ -55,14 +55,31 @@ function verdictFor(base, head) {
   return { verdict: 'equivalent' };
 }
 
-function runReplay(opts) {
-  const { capturesFile, beforeRoot, afterRoot } = opts;
-  const data = JSON.parse(fs.readFileSync(capturesFile, 'utf8'));
+// Group capture records by key -> {is_method, args:[b64]}.
+function groupCaptures(records) {
   const byKey = new Map();
-  for (const rec of data.records) {
+  for (const rec of records) {
     if (!byKey.has(rec.key)) byKey.set(rec.key, { is_method: rec.is_method, args: [] });
     byKey.get(rec.key).args.push(rec.args_b64);
   }
+  return byKey;
+}
+
+// Observe every captured unit against a single version root. Returns
+// { key: workerOutput }. Used by snapshot/drift (one version at a time).
+function observeVersion(root, byKey) {
+  const out = {};
+  for (const [key, info] of byKey) {
+    const [moduleRel, qualname] = splitKey(key);
+    out[key] = runWorker(root, moduleRel, qualname, info.is_method, info.args);
+  }
+  return out;
+}
+
+function runReplay(opts) {
+  const { capturesFile, beforeRoot, afterRoot } = opts;
+  const data = JSON.parse(fs.readFileSync(capturesFile, 'utf8'));
+  const byKey = groupCaptures(data.records);
 
   const rows = [];
   for (const [key, info] of byKey) {
@@ -80,4 +97,6 @@ function summarize(rows) {
   return c;
 }
 
-module.exports = { runReplay, summarize, render };
+module.exports = {
+  runReplay, summarize, render, splitKey, verdictFor, groupCaptures, observeVersion,
+};
