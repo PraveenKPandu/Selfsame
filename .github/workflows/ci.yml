@@ -33,6 +33,22 @@ jobs:
           PYTHONHASHSEED: "0"
         run: python -m unittest discover -s tests -v
 
+  test-node:
+    name: tests (node${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Run test suite
+        working-directory: packages/node
+        run: node --test test/
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
@@ -54,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [python]
+        lang: [python, node]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -67,3 +83,11 @@ jobs:
         env:
           PYTHONHASHSEED: "0"
         run: python -m unittest tests.test_conformance -v
+      - uses: actions/setup-node@v4
+        if: matrix.lang == 'node'
+        with:
+          node-version: "20"
+      - name: Node conformance
+        if: matrix.lang == 'node'
+        working-directory: packages/node
+        run: node --test test/conformance.test.js
