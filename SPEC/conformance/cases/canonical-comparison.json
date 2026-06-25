@@ -1,0 +1,75 @@
+{
+  "description": "Observation-equality vectors. Each case: are observations `a` and `b` considered equal by a conforming comparator? Observations embed canonical forms (assumed already order-normalized per protocol §4.3). Tests SPEC/protocol.md §8 (the equality rule).",
+  "cases": [
+    {
+      "name": "equal-int",
+      "a": { "val": ["int", 1] },
+      "b": { "val": ["int", 1] },
+      "same": true
+    },
+    {
+      "name": "different-int",
+      "a": { "val": ["int", 1] },
+      "b": { "val": ["int", 2] },
+      "same": false
+    },
+    {
+      "name": "nan-equals-nan",
+      "note": "nan canonicalizes to the string \"nan\", so two NaN results compare equal",
+      "a": { "val": ["float", "nan"] },
+      "b": { "val": ["float", "nan"] },
+      "same": true
+    },
+    {
+      "name": "negative-zero-normalized",
+      "note": "-0.0 normalizes to 0.0, so both sides carry 0.0 and compare equal",
+      "a": { "val": ["float", 0.0] },
+      "b": { "val": ["float", 0.0] },
+      "same": true
+    },
+    {
+      "name": "bool-not-int",
+      "note": "bool is tagged before int, so true and 1 have distinct canonical forms",
+      "a": { "val": ["bool", true] },
+      "b": { "val": ["int", 1] },
+      "same": false
+    },
+    {
+      "name": "value-vs-exception",
+      "a": { "val": ["none"] },
+      "b": { "exc": "ValueError" },
+      "same": false
+    },
+    {
+      "name": "same-exception-type",
+      "a": { "exc": "KeyError" },
+      "b": { "exc": "KeyError" },
+      "same": true
+    },
+    {
+      "name": "different-exception-type",
+      "a": { "exc": "KeyError" },
+      "b": { "exc": "IndexError" },
+      "same": false
+    },
+    {
+      "name": "normalized-dict-equal",
+      "a": { "val": ["dict", [[["str", "a"], ["int", 1]], [["str", "b"], ["int", 2]]]] },
+      "b": { "val": ["dict", [[["str", "a"], ["int", 1]], [["str", "b"], ["int", 2]]]] },
+      "same": true
+    },
+    {
+      "name": "method-mutation-differs",
+      "note": "same return value, but post-call receiver state differs → not equal (mutation is behavior)",
+      "a": { "val": ["none"], "self_after": ["obj", "Counter", ["dict", [[["str", "n"], ["int", 1]]]]] },
+      "b": { "val": ["none"], "self_after": ["obj", "Counter", ["dict", [[["str", "n"], ["int", 2]]]]] },
+      "same": false
+    },
+    {
+      "name": "method-mutation-same",
+      "a": { "val": ["none"], "self_after": ["obj", "Counter", ["dict", [[["str", "n"], ["int", 1]]]]] },
+      "b": { "val": ["none"], "self_after": ["obj", "Counter", ["dict", [[["str", "n"], ["int", 1]]]]] },
+      "same": true
+    }
+  ]
+}

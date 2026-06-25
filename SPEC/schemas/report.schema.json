@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PraveenKPandu/Selfsame/SPEC/schemas/report.schema.json",
+  "title": "Selfsame run report",
+  "description": "The machine-readable report every run writes (.selfsame/report.json). See SPEC/protocol.md §8-§9.",
+  "type": "object",
+  "properties": {
+    "tool": { "type": "string", "description": "Producing tool, e.g. 'selfsame'." },
+    "schema": { "type": "integer", "description": "Report schema version." },
+    "label": {
+      "type": "string",
+      "description": "Human label for the comparison, e.g. 'base..head' or 'snapshot..WORKTREE'."
+    },
+    "environment": {
+      "type": "object",
+      "description": "Reproducibility context (interpreter/runtime, refs, modules, snapshot).",
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "description": "Verdict counts for the run.",
+      "properties": {
+        "equivalent": { "type": "integer", "minimum": 0 },
+        "divergent": { "type": "integer", "minimum": 0 },
+        "unverifiable": { "type": "integer", "minimum": 0 },
+        "interface_change": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "timeout": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "functions_checked": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["equivalent", "divergent", "unverifiable", "functions_checked"],
+      "additionalProperties": true
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "function": { "type": "string", "description": "Unit qualname." },
+          "key": { "type": "string", "pattern": "^.+::.+$", "description": "<module>::<qualname>." },
+          "inputs": { "type": "integer", "minimum": 0, "description": "Number of captured inputs replayed." },
+          "verdict": {
+            "type": "string",
+            "enum": ["equivalent", "divergent", "unverifiable", "interface-change", "skipped", "error", "timeout"]
+          },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "reason": { "type": "string", "description": "Soundness reason when verdict is 'unverifiable'." },
+          "input_index": { "type": "integer", "description": "Index of the diverging input." },
+          "input": { "type": "string", "description": "Rendered diverging input (witness)." },
+          "minimized": { "type": "string", "description": "Minimized diverging input, when available." },
+          "base": { "type": "string", "description": "Rendered base-version observation at the witness." },
+          "head": { "type": "string", "description": "Rendered head-version observation at the witness." }
+        },
+        "required": ["key", "verdict"],
+        "additionalProperties": true
+      }
+    },
+    "unverified_changed": {
+      "type": "array",
+      "description": "Units that changed but had no captured inputs — the explicit coverage blind spot.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["tool", "schema", "summary", "results", "unverified_changed"],
+  "additionalProperties": true
+}

@@ -26,8 +26,10 @@ trusted publisher is added under that existing project. The first real release i
 
 ## Cutting a release
 
-1. Bump `version` in `pyproject.toml` (the workflow fails if the tag doesn't
-   match it).
+The Python package lives in `packages/python/`; the release workflow builds from there.
+
+1. Bump `version` in `packages/python/pyproject.toml` (the workflow fails if the tag
+   doesn't match it).
 2. Merge to `main` via gitflow and tag:
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z"

@@ -1,0 +1,8 @@
+# Repo-root ruff config for tools that lint the whole tree (e.g. pre-commit).
+# Per-package settings live in each package (e.g. packages/python/pyproject.toml);
+# ruff uses the nearest config to each file, so package code is unaffected by this.
+line-length = 100
+extend-exclude = ["name-claim", "experiments"]
+
+[lint]
+select = ["E", "F", "I"]

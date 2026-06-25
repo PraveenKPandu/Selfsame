@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **Repository restructured into a polyglot monorepo.** The Python implementation moved to
+  `packages/python/` (importable package name unchanged; `pip install selfsame` ships the
+  same package). CI and the PyPI release workflow now build from there. No behavior or API
+  change for users.
+
+### Added
+- **The Selfsame Protocol** (`SPEC/protocol.md`) — the language-neutral contract (canonical
+  form, soundness rules, verdict model, report schema) that every language implementation
+  must share, with JSON Schemas in `SPEC/schemas/`.
+- **Conformance suite** (`SPEC/conformance/`) — language-neutral comparator and soundness
+  vectors, run against the Python implementation in CI; the template for future languages.
+- **Language roadmap** (`docs/languages.md`) and design placeholders for JavaScript/TypeScript
+  (`packages/node/`, next) and Java (`packages/java/`). Go and Rust are documented as **held**
+  until they can match Python's automatic, sound guarantee.
+
 ## [0.3.0] - 2026-06-24
 
 A new axis of verification — proving that a passing result actually *depends* on

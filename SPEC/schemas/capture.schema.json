@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PraveenKPandu/Selfsame/SPEC/schemas/capture.schema.json",
+  "title": "Selfsame capture record",
+  "description": "A recorded call to a target, suitable for replay. The argument payload is serialized with the language-native mechanism; this schema fixes the envelope. See SPEC/protocol.md §5.1.",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^.+::.+$",
+      "description": "Identity of the captured unit: <module>::<qualname>."
+    },
+    "is_method": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the first captured argument is the receiver (self/this)."
+    },
+    "args_b64": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Base64 of the language-native serialized argument tuple."
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "lang": {
+          "type": "string",
+          "description": "Implementation language, e.g. 'python', 'javascript'."
+        },
+        "captured_with": {
+          "type": "string",
+          "description": "Tool name + version that produced this capture."
+        },
+        "serialization": {
+          "type": "string",
+          "description": "How args_b64 is encoded, e.g. 'pickle', 'structured-clone-json'."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": ["key", "args_b64"],
+  "additionalProperties": true
+}
