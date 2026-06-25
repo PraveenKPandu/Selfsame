@@ -143,7 +143,7 @@ implementations honest.
 | language | status | |
 |---|---|---|
 | Python | ✅ shipped (reference) | [`packages/python/`](packages/python/) · `pip install selfsame` |
-| JavaScript / TypeScript | 🟢 alpha | [`packages/node/`](packages/node/) — `verify` across git refs; passes conformance (CommonJS; ESM in progress) |
+| JavaScript / TypeScript | 🟢 alpha | [`packages/node/`](packages/node/) — `verify`/`snapshot`/`drift` + JSON report; passes conformance (CommonJS; ESM in progress) |
 | Java (JVM) | 🟡 core | [`packages/java/`](packages/java/) — comparator core passes conformance; agent capture pending |
 | Go, Rust | ⏸️ held | until they can match the full sound guarantee — see the [roadmap](docs/languages.md) |
 

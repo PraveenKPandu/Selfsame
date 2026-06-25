@@ -19,9 +19,12 @@ All notable changes to this project are documented here. The format is based on
   harness (freezes `Date`/`Math.random`/`crypto`/timers, refuses uncontrolled I/O & threads),
   and an end-to-end capture → replay → compare pipeline that catches real regressions.
   Commands: `selfsame verify --base <ref> -- <cmd>` (git-worktree, base-vs-working-tree, the
-  recommended one-command flow), plus `selfsame capture` / `selfsame replay` (directory pair,
-  no git needed). Capture covers CommonJS named exports and bare default function exports; ESM
-  and richer method support are in progress. Zero runtime dependencies; Node ≥ 18.
+  recommended one-command flow), `selfsame snapshot` / `selfsame drift` (freeze an accepted
+  build, then measure drift — no second branch; the AI-velocity loop), plus `selfsame capture`
+  / `selfsame replay` (directory pair, no git needed). Every verdict-producing command writes
+  an agent-consumable `.selfsame/report.json`. Capture covers CommonJS named exports and bare
+  default function exports; ESM and richer method support are in progress. Zero runtime
+  dependencies; Node ≥ 18.
 - **Java (JVM) comparator core** (`packages/java/`) — the third language, started. The
   canonical form, comparator, and soundness gate are implemented in pure JDK (incl. a tiny
   dependency-free JSON parser) and **pass the cross-language conformance suite**. Capture (a
