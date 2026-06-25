@@ -1,0 +1,52 @@
+name: release-node
+
+# Publishes packages/node to npm when a `node-vX.Y.Z` tag is pushed.
+# Uses npm Trusted Publishing (OIDC) — no NPM token stored in GitHub.
+# One-time setup is required on npmjs.com; see RELEASING.md.
+
+on:
+  push:
+    tags:
+      - "node-v*"
+  workflow_dispatch: {}   # build-only dry run (does not publish)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for npm OIDC trusted publishing + provenance
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/node
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing + provenance need a recent npm.
+      - run: npm install -g npm@latest
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#node-v}"
+          echo "package=$pkg  tag=$tag"
+          test "$pkg" = "$tag" || { echo "::error::tag $tag != package version $pkg"; exit 1; }
+
+      - name: Test
+        run: node --test test/*.test.js
+
+      - name: Publish to npm (dry run unless this is a tag)
+        run: |
+          # Prerelease versions (e.g. 0.1.0-alpha.0) publish under the `next`
+          # dist-tag so they never become `latest`.
+          NPM_TAG=$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            npm publish --provenance --access public --tag "$NPM_TAG"
+          else
+            npm publish --provenance --access public --tag "$NPM_TAG" --dry-run
+          fi

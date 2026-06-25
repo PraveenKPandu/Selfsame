@@ -1,0 +1,48 @@
+name: release-java
+
+# Builds the packages/java jar and attaches it to a GitHub Release when a
+# `java-vX.Y.Z` tag is pushed. The core is pure JDK, so the jar is built with
+# plain javac/jar (no Maven/network). Maven Central publishing is a documented
+# future step (needs the dev.selfsame namespace + GPG signing); see RELEASING.md.
+
+on:
+  push:
+    tags:
+      - "java-v*"
+  workflow_dispatch: {}   # build-only (no release)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the GitHub Release + upload the jar
+    defaults:
+      run:
+        working-directory: packages/java
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Test (dependency-free runner)
+        run: |
+          javac -d out src/main/java/dev/selfsame/*.java src/test/java/dev/selfsame/*.java
+          java -cp out dev.selfsame.TestMain
+
+      - name: Build jar
+        run: |
+          rm -rf classes && mkdir classes
+          javac -d classes src/main/java/dev/selfsame/*.java
+          VER="${GITHUB_REF_NAME#java-v}"
+          [ -n "$VER" ] || VER="dev"
+          jar --create --file "selfsame-${VER}.jar" -C classes .
+          ls -la selfsame-*.jar
+
+      - name: Attach jar to GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" packages/java/selfsame-*.jar --generate-notes --title "$GITHUB_REF_NAME"
+        working-directory: ${{ github.workspace }}
