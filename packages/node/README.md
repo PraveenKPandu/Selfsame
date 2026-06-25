@@ -24,14 +24,11 @@ Requires Node ≥ 18. Zero runtime dependencies.
 
 ## Use
 
-Two steps: record real inputs, then verify two versions against them.
+**One command (recommended)** — capture inputs from your test/app run, then verify the
+working tree against a git ref:
 
 ```bash
-# 1. Capture real inputs by running your tests/app (modules under --root get wrapped)
-selfsame capture --root ./src --out .selfsame -- node ./run-my-tests.js
-
-# 2. Replay those inputs across two versions and get a per-function verdict
-selfsame replay --before ./old --after ./src --captures .selfsame
+selfsame verify --base main --root ./src -- node ./run-my-tests.js
 ```
 
 ```
@@ -42,7 +39,16 @@ X applyDiscount  n=3  divergent  @ input #2
 selfsame: 0 equivalent · 1 divergent · 0 unverifiable · 0 skipped · 0 error
 ```
 
-Exit code is non-zero on any divergence, so it drops into CI.
+Each version is checked out as a `git worktree` and run in its own process (with the repo's
+`node_modules` symlinked in). Exit code is non-zero on any divergence, so it drops into CI.
+Add `--head <ref>` to compare two refs instead of working-tree-vs-base.
+
+**Or two explicit steps** (no git needed) — capture, then replay two directories:
+
+```bash
+selfsame capture --root ./src --out .selfsame -- node ./run-my-tests.js
+selfsame replay  --before ./old --after ./src --captures .selfsame
+```
 
 ## How it maps to the protocol
 
@@ -57,14 +63,17 @@ Exit code is non-zero on any divergence, so it drops into CI.
 ## Honest limitations (alpha)
 
 - **CommonJS only** for capture. ESM capture needs loader hooks (`module.register`, Node ≥ 20)
-  — not yet wired. TypeScript works via compiled JS or a CJS TS runner.
-- **Named exports** are wrapped; a bare `module.exports = function` default export isn't yet.
+  — not yet wired (ESM bindings are immutable, so it requires import-time source instrumentation
+  rather than export-wrapping). TypeScript works via compiled JS or a CJS TS runner.
+- **Named exports** and **bare default function exports** (`module.exports = fn`) are wrapped;
+  a default-exported *class* isn't yet (its methods can't be resolved by name in replay).
 - **Methods** are best-effort: the receiver is serialized with `node:v8`, which doesn't restore
   the class prototype across versions, so method support is reliable for plain-data receivers.
 - I/O / thread counting is best-effort (`fs`, `net`, `worker_threads`); anything it can't see it
   may not refuse — the determinism guard (run-twice) is the backstop.
-- Version materialization is by **directory pair** (`--before`/`--after`); git-worktree and
-  npm-install-per-version (like the Python `verify`) are not yet built.
+- `verify` symlinks the repo's existing `node_modules` into each worktree (no per-version
+  reinstall); a version whose dependency set differs from the working tree's may need a manual
+  install in the worktree.
 
 See the [language roadmap](../../docs/languages.md). Contributions welcome against the
 [conformance suite](../../SPEC/conformance/).

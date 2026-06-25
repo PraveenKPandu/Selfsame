@@ -97,6 +97,26 @@ function wrapClassMethods(cls, moduleRel) {
   }
 }
 
+// Wrap a bare default function export (`module.exports = function ...`). Returns
+// the wrapper (the caller swaps it into the module cache + return value). Own
+// properties are copied so `fn.foo` still works. Default-exported *classes* are
+// not handled here (their methods can't be resolved by name in replay yet).
+function wrapDefault(orig, moduleRel) {
+  if (isClass(orig)) { wrapClassMethods(orig, moduleRel); return orig; }
+  const key = `${moduleRel}::(default)`;
+  function wrapper(...args) {
+    record(key, false, args);
+    return orig.apply(this, args);
+  }
+  for (const k of Object.keys(orig)) {
+    try { wrapper[k] = orig[k]; } catch (e) { /* read-only prop */ }
+  }
+  Object.defineProperty(wrapper, 'name', { value: orig.name, configurable: true });
+  wrapper.__selfsame_orig = orig;
+  wrapped.add(wrapper);
+  return wrapper;
+}
+
 function wrapExports(exports, moduleRel) {
   if (!exports || (typeof exports !== 'object' && typeof exports !== 'function')) return;
   for (const name of Object.keys(exports)) {
@@ -118,7 +138,19 @@ if (ROOT && OUT) {
     const exports = origLoad.apply(this, arguments);
     try {
       const file = Module._resolveFilename(request, parent, isMain);
-      if (underRoot(file)) wrapExports(exports, relKey(file));
+      if (underRoot(file)) {
+        const rel = relKey(file);
+        if (typeof exports === 'function' && !wrapped.has(exports)) {
+          const w = wrapDefault(exports, rel);
+          if (w !== exports) {
+            const cached = Module._cache[file];
+            if (cached) cached.exports = w;
+            return w;
+          }
+        } else {
+          wrapExports(exports, rel);
+        }
+      }
     } catch (e) { /* resolution failures are not ours to surface */ }
     return exports;
   };

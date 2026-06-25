@@ -68,6 +68,33 @@ test('captures inputs, catches a silent regression, leaves the unchanged fn equi
   }
 });
 
+test('captures and verifies a bare default function export (module.exports = fn)', () => {
+  const before = mktmp();
+  const after = mktmp();
+  const capdir = mktmp();
+  try {
+    fs.writeFileSync(path.join(before, 'slug.js'),
+      "module.exports = function slugify(s){ return s.toLowerCase().split(/\\s+/).join('-'); };\n");
+    fs.writeFileSync(path.join(before, 'run.js'),
+      "const slugify = require('./slug.js'); ['Hello World','Hello, World!'].forEach(slugify);\n");
+    // changed behavior: also strip non-alphanumerics
+    fs.writeFileSync(path.join(after, 'slug.js'),
+      "module.exports = function slugify(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-'); };\n");
+
+    const cap = runCapture({
+      root: before, outDir: capdir,
+      command: [process.execPath, path.join(before, 'run.js')],
+    });
+    assert.ok(cap.count >= 2, `expected captured inputs, got ${cap.count}`);
+    const rows = runReplay({ capturesFile: cap.capturesFile, beforeRoot: before, afterRoot: after });
+    const row = rows.find((r) => r.qualname === '(default)');
+    assert.ok(row, `default export should be captured: ${JSON.stringify(rows)}`);
+    assert.strictEqual(row.verdict, 'divergent', JSON.stringify(row));
+  } finally {
+    for (const d of [before, after, capdir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('identical versions report equivalent (no false positive)', () => {
   const before = mktmp();
   const after = mktmp();
