@@ -49,6 +49,25 @@ jobs:
         working-directory: packages/node
         run: node --test test/*.test.js
 
+  test-java:
+    name: tests (java${{ matrix.java-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: ["17", "21"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+      - name: Compile + run tests (dependency-free runner)
+        working-directory: packages/java
+        run: |
+          javac -d out src/main/java/dev/selfsame/*.java src/test/java/dev/selfsame/*.java
+          java -cp out dev.selfsame.TestMain
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
@@ -70,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [python, node]
+        lang: [python, node, java]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -91,3 +110,14 @@ jobs:
         if: matrix.lang == 'node'
         working-directory: packages/node
         run: node --test test/conformance.test.js
+      - uses: actions/setup-java@v4
+        if: matrix.lang == 'java'
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Java conformance
+        if: matrix.lang == 'java'
+        working-directory: packages/java
+        run: |
+          javac -d out src/main/java/dev/selfsame/*.java src/test/java/dev/selfsame/*.java
+          java -cp out dev.selfsame.TestMain

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>dev.selfsame</groupId>
+  <artifactId>selfsame</artifactId>
+  <version>0.1.0-alpha</version>
+  <packaging>jar</packaging>
+
+  <name>selfsame</name>
+  <description>Sound behavior-equivalence verification for the JVM (Selfsame Protocol implementation)</description>
+  <url>https://github.com/PraveenKPandu/Selfsame</url>
+
+  <licenses>
+    <license><name>MIT</name></license>
+  </licenses>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!--
+    The core (canonical form, comparator, soundness gate) is pure JDK — no
+    runtime dependencies. Tests run via the dependency-free runner
+    dev.selfsame.TestMain (no JUnit to download); see README. The future
+    capture module will need a bytecode-instrumentation library (ByteBuddy),
+    isolated to that module.
+  -->
+  <dependencies></dependencies>
+</project>
