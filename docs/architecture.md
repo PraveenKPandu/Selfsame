@@ -1,5 +1,11 @@
 # Selfsame — architecture & engineering spec
 
+> **Scope.** This is the architecture of the **Python implementation**
+> ([`packages/python/`](../packages/python/)). The *cross-language* contract — the canonical
+> form, soundness rules, verdict vocabulary, and report schema that every implementation
+> shares — is the [Selfsame Protocol](../SPEC/protocol.md). This document is the Python
+> reference for it (and goes deeper on Python-specific internals).
+
 This is the normative contract for the engine: the data formats, the canonical
 comparison form, the soundness rules, the verdict model, and the module map. It
 describes the code as of **v0.2.0**. User-facing docs live alongside this

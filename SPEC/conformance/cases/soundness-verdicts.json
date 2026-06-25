@@ -1,0 +1,63 @@
+{
+  "description": "Soundness-gate vectors. Each case: feeding observation(s) to the soundness gate, what reason (if any) makes them unverifiable? `reason: null` means verifiable. Tests SPEC/protocol.md §6, including the priority order.",
+  "cases": [
+    {
+      "name": "clean-value-is-verifiable",
+      "observations": [ { "val": ["int", 42] } ],
+      "reason": null
+    },
+    {
+      "name": "clean-exception-is-verifiable",
+      "observations": [ { "exc": "ValueError" } ],
+      "reason": null
+    },
+    {
+      "name": "opaque-return",
+      "observations": [ { "val": ["opaque", "Socket", "<unrepresentable>"] } ],
+      "reason": "opaque-return"
+    },
+    {
+      "name": "opaque-nested-in-container",
+      "note": "opaque is contagious — an opaque anywhere in the tree refuses the whole observation",
+      "observations": [ { "val": ["list", [["int", 1], ["opaque", "Thread", "<unrepresentable>"]]] } ],
+      "reason": "opaque-return"
+    },
+    {
+      "name": "opaque-state",
+      "observations": [ { "val": ["none"], "self_after": ["opaque", "Conn", "<unrepresentable>"] } ],
+      "reason": "opaque-state"
+    },
+    {
+      "name": "uncontrolled-io",
+      "observations": [ { "val": ["int", 0], "io": 1 } ],
+      "reason": "uncontrolled-io"
+    },
+    {
+      "name": "concurrency",
+      "observations": [ { "val": ["int", 0], "threads": 1 } ],
+      "reason": "concurrency"
+    },
+    {
+      "name": "nondeterministic",
+      "observations": [ { "val": ["int", 0], "nondet": true } ],
+      "reason": "nondeterministic"
+    },
+    {
+      "name": "priority-nondet-beats-io",
+      "note": "when multiple conditions hold, nondeterminism is reported first",
+      "observations": [ { "val": ["int", 0], "nondet": true, "io": 5, "threads": 2 } ],
+      "reason": "nondeterministic"
+    },
+    {
+      "name": "priority-io-beats-concurrency",
+      "observations": [ { "val": ["int", 0], "io": 1, "threads": 1 } ],
+      "reason": "uncontrolled-io"
+    },
+    {
+      "name": "any-unsound-observation-refuses-the-set",
+      "note": "a list of observations is unverifiable if ANY member is",
+      "observations": [ { "val": ["int", 1] }, { "val": ["opaque", "X", "<unrepresentable>"] } ],
+      "reason": "opaque-return"
+    }
+  ]
+}

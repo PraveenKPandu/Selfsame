@@ -133,6 +133,24 @@ Full reference with every flag: **[docs/commands.md](docs/commands.md)**.
 | 🧭 [Limitations](docs/limitations.md) | the honest boundaries — read before you rely on it |
 | 📐 [Architecture & spec](docs/architecture.md) | the engineering contract — data formats, canonical schema, verdict model (for contributors) |
 
+## Languages
+
+Selfsame is a **protocol** with one reference implementation today. The
+[Selfsame Protocol](SPEC/protocol.md) defines what every language must share so a verdict
+means the same thing everywhere, and the [conformance suite](SPEC/conformance/) keeps
+implementations honest.
+
+| language | status | |
+|---|---|---|
+| Python | ✅ shipped (reference) | [`packages/python/`](packages/python/) · `pip install selfsame` |
+| JavaScript / TypeScript | 🟡 next | [`packages/node/`](packages/node/) |
+| Java (JVM) | 🔵 planned | [`packages/java/`](packages/java/) |
+| Go, Rust | ⏸️ held | until they can match the full sound guarantee — see the [roadmap](docs/languages.md) |
+
+The guarantee is the gate: a language joins only when it can capture real inputs,
+canonicalize by observable form, and control the clock/entropy (or soundly refuse what it
+can't). See the [language roadmap](docs/languages.md).
+
 ## Project
 
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Releasing: [RELEASING.md](RELEASING.md)

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PraveenKPandu/Selfsame/SPEC/schemas/canonical.schema.json",
+  "title": "Selfsame canonical form and observation",
+  "description": "Language-neutral canonical form (a tagged JSON array) and the observation record produced by replaying one input. See SPEC/protocol.md §4-§5.",
+  "$defs": {
+    "canonical": {
+      "description": "A canonical form: a JSON array whose first element is a string tag. Two values share a canonical form iff they are observationally indistinguishable.",
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "type": "string",
+          "enum": [
+            "none", "bool", "int", "float", "str", "bytes",
+            "list", "tuple", "set", "dict", "range",
+            "callable", "class", "obj", "pub-obj", "opaque", "maxdepth",
+            "datetime", "date", "time", "timedelta", "tzinfo",
+            "decimal", "complex", "fraction", "path",
+            "match", "pattern", "singleton", "iter"
+          ]
+        }
+      ],
+      "items": true
+    },
+    "observation": {
+      "description": "The result of replaying one input on one version of a unit.",
+      "type": "object",
+      "properties": {
+        "val": {
+          "$ref": "#/$defs/canonical",
+          "description": "Canonical form of the return value. Mutually exclusive with 'exc'."
+        },
+        "exc": {
+          "type": "string",
+          "description": "Exception/error type name, present iff the call raised. Mutually exclusive with 'val'."
+        },
+        "self_after": {
+          "$ref": "#/$defs/canonical",
+          "description": "Canonical form of the post-call receiver state (methods only)."
+        },
+        "io": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Count of uncontrolled I/O operations observed (> 0 ⇒ unverifiable)."
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Count of threads/goroutines started (> 0 ⇒ unverifiable)."
+        },
+        "nondet": {
+          "type": "boolean",
+          "default": false,
+          "description": "True iff two controlled runs of this input disagreed (⇒ unverifiable)."
+        }
+      },
+      "oneOf": [
+        { "required": ["val"] },
+        { "required": ["exc"] }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

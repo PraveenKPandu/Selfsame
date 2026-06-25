@@ -2,7 +2,6 @@
 refactor. Run:  python3 -m probe.check examples/calc_before.py examples/calc_after.py
 """
 
-import re
 import secrets
 
 
