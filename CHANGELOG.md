@@ -36,8 +36,10 @@ All notable changes to this project are documented here. The format is based on
   tiny dependency-free JSON parser) and **pass the cross-language conformance suite**; on top
   sits a `-javaagent` (ByteBuddy) capture → replay → compare pipeline (`selfsame capture` /
   `selfsame replay`) for public static methods, proven to catch real regressions. ByteBuddy is
-  shaded into the agent jar, so a consumer's project adds **no dependency**. Determinism is the
-  run-twice guard; instance methods, a one-command `verify`, and I/O quarantine are next.
+  shaded into the agent jar, so a consumer's project adds **no dependency**. Captures public
+  static **and instance** methods — the receiver is reconstructed across versions (via
+  `ReflectionFactory`, like Java serialization) and its post-call mutation is compared.
+  Determinism is the run-twice guard; a one-command `verify` and I/O quarantine are next.
   Java 17+.
 - **The Selfsame Protocol** (`SPEC/protocol.md`) — the language-neutral contract (canonical
   form, soundness rules, verdict model, report schema) that every language implementation

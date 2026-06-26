@@ -1,5 +1,8 @@
 package dev.selfsame;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -8,24 +11,30 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Round-trippable, type-faithful serialization of method arguments, so captured
- * inputs can be re-invoked against another version. UNLIKE {@link Canonical}
- * (which is lossy/observable, for comparison), ValueCodec must reconstruct the
- * actual values, so each is tagged with its concrete type.
+ * Round-trippable, type-faithful serialization of method arguments and receivers,
+ * so captured inputs (and the `this` of an instance method) can be reconstructed
+ * and re-invoked against another version. UNLIKE {@link Canonical} (lossy, for
+ * comparison), this must rebuild the actual values, so each is tagged with its
+ * concrete type.
  *
- * Supported (MVP): null, boxed primitives, char, String, BigInteger/BigDecimal,
- * byte[], List, Map, Object[]. Anything else makes encoding return null, so the
- * capture is skipped — sound under-capture, never a wrong reconstruction.
+ * Supported: null, boxed primitives, char, String, BigInteger/BigDecimal, byte[],
+ * List, Map, Object[], and arbitrary non-JDK objects (encoded by their declared
+ * instance fields; reconstructed via sun.reflect.ReflectionFactory, the same
+ * mechanism Java serialization / Jackson / Kryo use). Anything that can't be
+ * round-tripped makes encoding return null, so the capture is skipped — sound
+ * under-capture, never a wrong reconstruction.
  */
 public final class ValueCodec {
     private ValueCodec() {}
+
+    private static final int MAX_DEPTH = 40;
 
     /** Encode an argument array; null if any element is unsupported. */
     public static List<Object> encodeArgs(Object[] args) {
         List<Object> out = new ArrayList<>(args.length);
         for (Object a : args) {
-            Object e = encode(a);
-            if (e == null) return null; // unsupported -> skip the whole call
+            Object e = encode(a, 0);
+            if (e == null) return null;
             out.add(e);
         }
         return out;
@@ -44,8 +53,8 @@ public final class ValueCodec {
         return l;
     }
 
-    /** Returns the tagged encoding, or null if the type is unsupported. */
-    static List<Object> encode(Object v) {
+    static List<Object> encode(Object v, int depth) {
+        if (depth > MAX_DEPTH) return null;
         if (v == null) { List<Object> l = new ArrayList<>(); l.add("n"); return l; }
         if (v instanceof Boolean) return t("z", v);
         if (v instanceof Byte) return t("b", ((Byte) v).longValue());
@@ -66,13 +75,13 @@ public final class ValueCodec {
         }
         if (v instanceof List) {
             List<Object> items = new ArrayList<>();
-            for (Object x : (List<?>) v) { Object e = encode(x); if (e == null) return null; items.add(e); }
+            for (Object x : (List<?>) v) { Object e = encode(x, depth + 1); if (e == null) return null; items.add(e); }
             return t("list", items);
         }
         if (v instanceof Map) {
             List<Object> items = new ArrayList<>();
             for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
-                Object k = encode(e.getKey()); Object val = encode(e.getValue());
+                Object k = encode(e.getKey(), depth + 1), val = encode(e.getValue(), depth + 1);
                 if (k == null || val == null) return null;
                 List<Object> pair = new ArrayList<>(2); pair.add(k); pair.add(val); items.add(pair);
             }
@@ -81,10 +90,39 @@ public final class ValueCodec {
         if (v instanceof Object[]) {
             Object[] a = (Object[]) v;
             List<Object> items = new ArrayList<>(a.length);
-            for (Object x : a) { Object e = encode(x); if (e == null) return null; items.add(e); }
+            for (Object x : a) { Object e = encode(x, depth + 1); if (e == null) return null; items.add(e); }
             return t("arr", items);
         }
-        return null; // unsupported
+        return encodeObject(v, depth);
+    }
+
+    // Arbitrary non-JDK object -> ["o", className, [[field, enc], ...]].
+    private static List<Object> encodeObject(Object v, int depth) {
+        Class<?> cls = v.getClass();
+        String cn = cls.getName();
+        if (cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("jdk.")
+                || cn.startsWith("sun.") || cls.isArray()) {
+            return null; // unhandled JDK/array type -> skip (sound)
+        }
+        List<Object> fields = new ArrayList<>();
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) continue;
+                try {
+                    f.setAccessible(true);
+                    Object enc = encode(f.get(v), depth + 1);
+                    if (enc == null) return null; // unencodable field -> skip whole object
+                    List<Object> pair = new ArrayList<>(2);
+                    pair.add(f.getName()); pair.add(enc);
+                    fields.add(pair);
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+        }
+        List<Object> out = new ArrayList<>(3);
+        out.add("o"); out.add(cn); out.add(fields);
+        return out;
     }
 
     @SuppressWarnings("unchecked")
@@ -130,7 +168,46 @@ public final class ValueCodec {
                 for (int i = 0; i < out.length; i++) out[i] = decode((List<Object>) items.get(i));
                 return out;
             }
+            case "o": return decodeObject((String) e.get(1), (List<Object>) e.get(2));
             default: throw new IllegalArgumentException("unknown value tag: " + tag);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object decodeObject(String className, List<Object> fields) {
+        try {
+            Class<?> cls = Class.forName(className);
+            Object obj = Allocator.allocate(cls);
+            for (Object fo : fields) {
+                List<Object> pair = (List<Object>) fo;
+                String name = (String) pair.get(0);
+                Object value = decode((List<Object>) pair.get(1));
+                Field f = findField(cls, name);
+                if (f == null) continue; // field absent in this version -> best-effort
+                f.setAccessible(true);
+                f.set(obj, value);
+            }
+            return obj;
+        } catch (Exception e) {
+            throw new RuntimeException("cannot reconstruct " + className + ": " + e, e);
+        }
+    }
+
+    private static Field findField(Class<?> cls, String name) {
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            try { return c.getDeclaredField(name); } catch (NoSuchFieldException ignored) { }
+        }
+        return null;
+    }
+
+    /** Allocates an instance without invoking a constructor (sun.reflect.ReflectionFactory). */
+    private static final class Allocator {
+        static Object allocate(Class<?> cls) throws Exception {
+            sun.reflect.ReflectionFactory rf = sun.reflect.ReflectionFactory.getReflectionFactory();
+            Constructor<?> objCtor = Object.class.getDeclaredConstructor();
+            Constructor<?> c = rf.newConstructorForSerialization(cls, objCtor);
+            c.setAccessible(true);
+            return c.newInstance();
         }
     }
 }

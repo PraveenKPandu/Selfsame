@@ -13,7 +13,9 @@ public final class CaptureAdvice {
     private CaptureAdvice() {}
 
     @Advice.OnMethodEnter
-    static void enter(@Advice.Origin Method method, @Advice.AllArguments Object[] args) {
-        Recorder.record(method, args);
+    static void enter(@Advice.This(optional = true) Object self,
+                      @Advice.Origin Method method,
+                      @Advice.AllArguments Object[] args) {
+        Recorder.record(self, method, args);
     }
 }

@@ -156,7 +156,7 @@ implementations honest.
 |---|---|---|
 | Python | ✅ shipped (reference) | [`packages/python/`](packages/python/) · `pip install selfsame` |
 | JavaScript / TypeScript | 🟢 alpha | [`packages/node/`](packages/node/) — `verify`/`snapshot`/`drift` + JSON report; passes conformance (CommonJS; ESM in progress) |
-| Java (JVM) | 🟢 alpha | [`packages/java/`](packages/java/) — end-to-end `-javaagent` capture → replay (static methods); passes conformance |
+| Java (JVM) | 🟢 alpha | [`packages/java/`](packages/java/) — end-to-end `-javaagent` capture → replay (static + instance methods); passes conformance |
 | Go, Rust | ⏸️ held | until they can match the full sound guarantee — see the [roadmap](docs/languages.md) |
 
 The guarantee is the gate: a language joins only when it can capture real inputs,

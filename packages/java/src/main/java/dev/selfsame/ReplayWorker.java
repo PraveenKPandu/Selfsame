@@ -39,26 +39,26 @@ public final class ReplayWorker {
             @SuppressWarnings("unchecked")
             List<Object> argsB64 = (List<Object>) job.get("args_b64");
 
+            boolean isMethod = Boolean.TRUE.equals(job.get("is_method"));
             Class<?> cls = Class.forName(className);
-            Method m = resolve(cls, methodName, paramTypes);
+            Method m = resolve(cls, methodName, paramTypes, isMethod);
             if (m == null) { out.put("absent", true); print(out); return; }
             m.setAccessible(true);
             out.put("loaded", true);
 
             for (Object b64o : argsB64) {
                 String b64 = (String) b64o;
-                @SuppressWarnings("unchecked")
-                List<Object> encoded = (List<Object>) Json.parse(
-                        new String(Base64.getDecoder().decode(b64), "UTF-8"));
-                Object[] callArgs = ValueCodec.decodeArgs(encoded);
-
-                Object r1 = runOnce(m, callArgs);
-                Object r2 = runOnce(m, callArgs); // determinism guard
+                // Decode fresh each run: an instance method may mutate the receiver,
+                // so both the determinism guard and the post-call state need a clean
+                // copy reconstructed from the captured encoding.
+                Object[] r1 = runOnce(m, isMethod, b64);
+                Object[] r2 = runOnce(m, isMethod, b64);
                 Map<String, Object> rec = new LinkedHashMap<>();
-                if (!Soundness.deepEqual(r1, r2)) {
+                if (!Soundness.deepEqual(r1[0], r2[0]) || !Soundness.deepEqual(r1[1], r2[1])) {
                     rec.put("nondet", true);
                 } else {
-                    putResult(rec, r1);
+                    putResult(rec, r1[0]);
+                    if (isMethod) rec.put("self_after", r1[1]);
                 }
                 obs.add(rec);
             }
@@ -68,17 +68,32 @@ public final class ReplayWorker {
         print(out);
     }
 
-    // Returns a 2-element list ["val", canonical] or ["exc", typeName].
-    private static Object runOnce(Method m, Object[] args) {
+    // Decodes the captured input fresh and runs it. Returns [result, selfAfter]
+    // where result is ["val", canonical] or ["exc", typeName], and selfAfter is
+    // the canonical post-call receiver state (null for static methods).
+    @SuppressWarnings("unchecked")
+    private static Object[] runOnce(Method m, boolean isMethod, String b64) throws Exception {
+        List<Object> encoded = (List<Object>) Json.parse(
+                new String(Base64.getDecoder().decode(b64), "UTF-8"));
+        Object[] values = ValueCodec.decodeArgs(encoded);
+        Object receiver = null;
+        Object[] callArgs = values;
+        if (isMethod) {
+            receiver = values[0];
+            callArgs = Arrays.copyOfRange(values, 1, values.length);
+        }
+        Object result;
         try {
-            Object ret = m.invoke(null, args == null ? new Object[0] : args);
-            return Arrays.asList("val", Canonical.canonical(ret));
+            Object ret = m.invoke(receiver, callArgs);
+            result = Arrays.asList("val", Canonical.canonical(ret));
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
-            return Arrays.asList("exc", cause.getClass().getName());
+            result = Arrays.asList("exc", cause.getClass().getName());
         } catch (Throwable t) {
-            return Arrays.asList("exc", t.getClass().getName());
+            result = Arrays.asList("exc", t.getClass().getName());
         }
+        Object selfAfter = isMethod ? Canonical.canonical(receiver) : null;
+        return new Object[]{result, selfAfter};
     }
 
     @SuppressWarnings("unchecked")
@@ -88,10 +103,10 @@ public final class ReplayWorker {
         else rec.put("val", pair.get(1));
     }
 
-    private static Method resolve(Class<?> cls, String name, List<Object> paramTypes) {
+    private static Method resolve(Class<?> cls, String name, List<Object> paramTypes, boolean isMethod) {
         for (Method m : cls.getDeclaredMethods()) {
             if (!m.getName().equals(name)) continue;
-            if (!Modifier.isStatic(m.getModifiers())) continue;
+            if (Modifier.isStatic(m.getModifiers()) == isMethod) continue; // static iff !isMethod
             Class<?>[] p = m.getParameterTypes();
             if (p.length != paramTypes.size()) continue;
             boolean match = true;
