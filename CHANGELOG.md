@@ -31,11 +31,14 @@ All notable changes to this project are documented here. The format is based on
   default function exports; ESM and richer method support are in progress. Zero runtime
   dependencies; Node ≥ 18. **Published to npm** as `selfsame` (alpha, under the `next` tag):
   `npm install -g selfsame@next`.
-- **Java (JVM) comparator core** (`packages/java/`) — the third language, started. The
-  canonical form, comparator, and soundness gate are implemented in pure JDK (incl. a tiny
-  dependency-free JSON parser) and **pass the cross-language conformance suite**. Capture (a
-  `-javaagent`), determinism control, and replay are not built yet — this is a conformant
-  comparator core, not yet a runnable `verify`. Java 17+, no runtime dependencies.
+- **Java (JVM) implementation** (`packages/java/`, alpha) — the third language, now
+  **end-to-end**. The canonical form, comparator, and soundness gate are pure JDK (incl. a
+  tiny dependency-free JSON parser) and **pass the cross-language conformance suite**; on top
+  sits a `-javaagent` (ByteBuddy) capture → replay → compare pipeline (`selfsame capture` /
+  `selfsame replay`) for public static methods, proven to catch real regressions. ByteBuddy is
+  shaded into the agent jar, so a consumer's project adds **no dependency**. Determinism is the
+  run-twice guard; instance methods, a one-command `verify`, and I/O quarantine are next.
+  Java 17+.
 - **The Selfsame Protocol** (`SPEC/protocol.md`) — the language-neutral contract (canonical
   form, soundness rules, verdict model, report schema) that every language implementation
   must share, with JSON Schemas in `SPEC/schemas/`.

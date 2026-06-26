@@ -68,6 +68,24 @@ jobs:
           javac -d out src/main/java/dev/selfsame/*.java src/test/java/dev/selfsame/*.java
           java -cp out dev.selfsame.TestMain
 
+  # The agent-based capture -> replay pipeline (needs ByteBuddy + the shaded jar,
+  # so it builds with Maven, unlike the pure-JDK conformance job above).
+  test-java-agent:
+    name: java agent e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Build shaded jar + run capture/replay e2e
+        working-directory: packages/java
+        run: |
+          mvn -B -ntp -DskipTests package
+          bash e2e.sh
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
