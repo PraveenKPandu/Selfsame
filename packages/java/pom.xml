@@ -4,7 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>dev.selfsame</groupId>
+  <!-- groupId is the GitHub-verified Maven Central namespace; the Java package
+       stays dev.selfsame (groupId and package namespace are independent). -->
+  <groupId>io.github.praveenkpandu</groupId>
   <artifactId>selfsame</artifactId>
   <version>0.1.0-alpha</version>
   <packaging>jar</packaging>
@@ -14,8 +16,26 @@
   <url>https://github.com/PraveenKPandu/Selfsame</url>
 
   <licenses>
-    <license><name>MIT</name></license>
+    <license>
+      <name>MIT License</name>
+      <url>https://github.com/PraveenKPandu/Selfsame/blob/main/LICENSE</url>
+      <distribution>repo</distribution>
+    </license>
   </licenses>
+
+  <developers>
+    <developer>
+      <id>PraveenKPandu</id>
+      <name>PraveenKPandu</name>
+      <url>https://github.com/PraveenKPandu</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/PraveenKPandu/Selfsame.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/PraveenKPandu/Selfsame.git</developerConnection>
+    <url>https://github.com/PraveenKPandu/Selfsame</url>
+  </scm>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
@@ -24,12 +44,11 @@
   </properties>
 
   <!--
-    The comparator core (Canonical/Soundness/Json/ValueCodec) and the replay
-    worker are pure JDK. ByteBuddy is needed ONLY by the capture agent
-    (dev.selfsame.agent.*); it is shaded into the single output jar so a consumer
-    adds NO dependency to their own build (the agent jar is self-contained, like
-    the OpenTelemetry/Datadog Java agents). The conformance core also builds with
-    plain javac (no Maven), see README.
+    The comparator core (Canonical/Soundness/Json/ValueCodec) + replay worker are
+    pure JDK. ByteBuddy is needed only by the capture agent (dev.selfsame.agent.*)
+    and is shaded into the single output jar, so a consumer adds NO dependency
+    (the published POM is dependency-reduced). The conformance core also builds
+    with plain javac (no Maven); see README.
   -->
   <dependencies>
     <dependency>
@@ -66,4 +85,76 @@
       </plugin>
     </plugins>
   </build>
+
+  <!--
+    Activated for publishing to Maven Central (`mvn -P release deploy`). Produces
+    the required -sources and -javadoc jars, GPG-signs every artifact, and uploads
+    via the Sonatype Central Portal. Requires (CI secrets / local settings):
+    a `central` server (Portal token) and a GPG key. See RELEASING.md.
+  -->
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals><goal>jar-no-fork</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.7.0</version>
+            <configuration>
+              <doclint>none</doclint>
+              <quiet>true</quiet>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals><goal>jar</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.4</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+                <configuration>
+                  <!-- non-interactive signing in CI (passphrase via env/settings) -->
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.5.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>true</autoPublish>
+              <waitUntil>published</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

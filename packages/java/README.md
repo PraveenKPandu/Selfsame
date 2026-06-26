@@ -18,6 +18,24 @@ the results structurally.
 Java 17+. **Your project adds no dependency** — ByteBuddy is shaded inside the agent jar (the
 same way the OpenTelemetry/Datadog Java agents work), so nothing enters your build.
 
+## Install
+
+Maven Central coordinate (published as `io.github.praveenkpandu:selfsame`):
+
+```xml
+<dependency>
+  <groupId>io.github.praveenkpandu</groupId>
+  <artifactId>selfsame</artifactId>
+  <version>0.1.0-alpha</version>
+</dependency>
+```
+```gradle
+implementation("io.github.praveenkpandu:selfsame:0.1.0-alpha")
+```
+
+Or grab the runnable jar from the [GitHub Release](https://github.com/PraveenKPandu/Selfsame/releases)
+and use it directly: `java -jar selfsame.jar …` (CLI) or `-javaagent:selfsame.jar=…` (capture).
+
 ## Use
 
 ```bash

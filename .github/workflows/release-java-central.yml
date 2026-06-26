@@ -1,0 +1,63 @@
+name: release-java-central
+
+# Publishes the Java package to Maven Central (Sonatype Central Portal) on a
+# `java-vX.Y.Z` tag. Runs ONLY once the maintainer has configured the required
+# secrets (see RELEASING.md); otherwise it no-ops, so it never blocks the
+# GitHub-Release workflow. Maven Central requires GPG-signed artifacts + a
+# verified namespace (io.github.praveenkpandu).
+#
+# Required repo secrets:
+#   CENTRAL_TOKEN_USERNAME / CENTRAL_TOKEN_PASSWORD  (Central Portal user token)
+#   GPG_PRIVATE_KEY  (ASCII-armored private key)  /  GPG_PASSPHRASE
+
+on:
+  push:
+    tags:
+      - "java-v*"
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+      CENTRAL_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Gate on Central secrets
+        id: gate
+        run: |
+          if [ -z "$CENTRAL_USERNAME" ] || [ -z "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+            echo "Maven Central secrets not configured — skipping (see RELEASING.md)."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Verify tag matches pom version
+        if: steps.gate.outputs.go == 'true' && startsWith(github.ref, 'refs/tags/')
+        working-directory: packages/java
+        run: |
+          pom=$(grep -m1 '<version>' pom.xml | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
+          tag="${GITHUB_REF_NAME#java-v}"
+          echo "pom=$pom  tag=$tag"
+          test "$pom" = "$tag" || { echo "::error::tag $tag != pom version $pom"; exit 1; }
+
+      - name: Deploy to Maven Central
+        if: steps.gate.outputs.go == 'true'
+        working-directory: packages/java
+        run: mvn -B -ntp -P release -DskipTests deploy
