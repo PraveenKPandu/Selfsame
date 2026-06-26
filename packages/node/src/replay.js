@@ -11,16 +11,17 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { same, unsound } = require('./soundness');
 
-const WORKER = path.join(__dirname, 'replayWorker.js');
+const WORKER = path.join(__dirname, 'replayWorker.js');          // CommonJS
+const ESM_WORKER = path.join(__dirname, 'esmReplayWorker.mjs');  // ES modules
 
 function splitKey(key) {
   const i = key.indexOf('::');
   return [key.slice(0, i), key.slice(i + 2)];
 }
 
-function runWorker(versionRoot, moduleRel, qualname, isMethod, argsB64) {
+function runWorker(versionRoot, moduleRel, qualname, isMethod, argsB64, esm) {
   const job = JSON.stringify({ versionRoot, moduleRel, qualname, is_method: isMethod, args_b64: argsB64 });
-  const r = spawnSync(process.execPath, [WORKER], {
+  const r = spawnSync(process.execPath, [esm ? ESM_WORKER : WORKER], {
     input: job, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     env: { ...process.env, PYTHONHASHSEED: '0' },
   });
@@ -55,11 +56,11 @@ function verdictFor(base, head) {
   return { verdict: 'equivalent' };
 }
 
-// Group capture records by key -> {is_method, args:[b64]}.
+// Group capture records by key -> {is_method, esm, args:[b64]}.
 function groupCaptures(records) {
   const byKey = new Map();
   for (const rec of records) {
-    if (!byKey.has(rec.key)) byKey.set(rec.key, { is_method: rec.is_method, args: [] });
+    if (!byKey.has(rec.key)) byKey.set(rec.key, { is_method: rec.is_method, esm: !!rec.esm, args: [] });
     byKey.get(rec.key).args.push(rec.args_b64);
   }
   return byKey;
@@ -71,7 +72,7 @@ function observeVersion(root, byKey) {
   const out = {};
   for (const [key, info] of byKey) {
     const [moduleRel, qualname] = splitKey(key);
-    out[key] = runWorker(root, moduleRel, qualname, info.is_method, info.args);
+    out[key] = runWorker(root, moduleRel, qualname, info.is_method, info.args, info.esm);
   }
   return out;
 }
@@ -84,8 +85,8 @@ function runReplay(opts) {
   const rows = [];
   for (const [key, info] of byKey) {
     const [moduleRel, qualname] = splitKey(key);
-    const base = runWorker(beforeRoot, moduleRel, qualname, info.is_method, info.args);
-    const head = runWorker(afterRoot, moduleRel, qualname, info.is_method, info.args);
+    const base = runWorker(beforeRoot, moduleRel, qualname, info.is_method, info.args, info.esm);
+    const head = runWorker(afterRoot, moduleRel, qualname, info.is_method, info.args, info.esm);
     rows.push({ key, qualname, inputs: info.args.length, ...verdictFor(base, head) });
   }
   return rows;
