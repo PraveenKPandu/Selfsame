@@ -41,8 +41,10 @@ jobs:
           echo "package=$pkg  tag=$tag"
           test "$pkg" = "$tag" || { echo "::error::tag $tag != package version $pkg"; exit 1; }
 
-      - name: Test
-        run: node --test test/*.test.js
+      - name: Install deps + test
+        run: |
+          npm install --no-audit --no-fund
+          node --test test/*.test.js
 
       - name: Publish to npm (dry run unless this is a tag)
         run: |

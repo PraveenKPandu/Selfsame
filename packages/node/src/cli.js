@@ -45,7 +45,7 @@ function cmdCapture(args) {
     console.error('usage: selfsame capture --root <srcdir> --out <capdir> -- <command...>');
     return 2;
   }
-  const res = runCapture({ root: flags.root, outDir: flags.out, command: rest });
+  const res = runCapture({ root: flags.root, outDir: flags.out, command: rest, esm: !!flags.esm });
   if (!res.exists) {
     console.error('no captures produced — did the command import modules under --root?');
     return 1;

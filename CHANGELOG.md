@@ -27,9 +27,11 @@ All notable changes to this project are documented here. The format is based on
   recommended one-command flow), `selfsame snapshot` / `selfsame drift` (freeze an accepted
   build, then measure drift — no second branch; the AI-velocity loop), plus `selfsame capture`
   / `selfsame replay` (directory pair, no git needed). Every verdict-producing command writes
-  an agent-consumable `.selfsame/report.json`. Capture covers CommonJS named exports and bare
-  default function exports; ESM and richer method support are in progress. Zero runtime
-  dependencies; Node ≥ 18. **Published to npm** as `selfsame` (alpha, under the `next` tag):
+  an agent-consumable `.selfsame/report.json`. Capture covers CommonJS (named + bare default
+  function exports) and **ES modules** (`capture --esm`, Node ≥ 20.6 — a `module.register`
+  loader reads export names with es-module-lexer and re-exports them wrapped, no source
+  mutation or double-execution); richer method support is in progress. Node ≥ 18; one small
+  dependency (es-module-lexer) for the ESM path. **Published to npm** as `selfsame` (alpha, under the `next` tag):
   `npm install -g selfsame@next`.
 - **Java (JVM) implementation** (`packages/java/`, alpha) — the third language, now
   **end-to-end**. The canonical form, comparator, and soundness gate are pure JDK (incl. a

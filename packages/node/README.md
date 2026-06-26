@@ -2,8 +2,9 @@
 
 > **Status: alpha.** The protocol-critical core (canonical form, comparator, soundness
 > gate) passes the cross-language [conformance suite](../../SPEC/conformance/), and an
-> end-to-end capture → replay → compare pipeline catches real regressions. Capture currently
-> covers **CommonJS** modules; ESM and richer method/receiver support are in progress.
+> end-to-end capture → replay → compare pipeline catches real regressions. Capture covers
+> both **CommonJS** and **ES modules** (ESM needs Node ≥ 20.6); richer method/receiver
+> support is in progress.
 
 The JavaScript/TypeScript implementation of the [Selfsame Protocol](../../SPEC/protocol.md) —
 sound, zero-false-confidence behavior checking. It captures the *real* arguments your tests or
@@ -20,12 +21,21 @@ structurally. TypeScript is supported by running against compiled JS (or a CJS T
 npm install -g selfsame      # or run via npx
 ```
 
-Requires Node ≥ 18. Zero runtime dependencies.
+Requires Node ≥ 18 (≥ 20.6 for ESM capture). One small dependency
+([es-module-lexer](https://www.npmjs.com/package/es-module-lexer), to read ESM export names
+without executing modules).
 
 ## Use
 
-**One command (recommended)** — capture inputs from your test/app run, then verify the
-working tree against a git ref:
+For **ES modules**, add `--esm` to `capture` (uses a `module.register` loader; Node ≥ 20.6):
+
+```bash
+selfsame capture --esm --target ./src --out .selfsame -- node ./run-my-tests.mjs
+selfsame replay --before ./old --after ./src --captures .selfsame
+```
+
+**One command (recommended, CommonJS)** — capture inputs from your test/app run, then verify
+the working tree against a git ref:
 
 ```bash
 selfsame verify --base main --root ./src -- node ./run-my-tests.js
@@ -74,11 +84,11 @@ to relocate.
 
 ## Honest limitations (alpha)
 
-- **CommonJS only** for capture. ESM capture needs loader hooks (`module.register`, Node ≥ 20)
-  — not yet wired (ESM bindings are immutable, so it requires import-time source instrumentation
-  rather than export-wrapping). TypeScript works via compiled JS or a CJS TS runner.
-- **Named exports** and **bare default function exports** (`module.exports = fn`) are wrapped;
-  a default-exported *class* isn't yet (its methods can't be resolved by name in replay).
+- **CommonJS** captures named exports + bare default function exports (`module.exports = fn`);
+  a default-exported *class* isn't yet. **ESM** (`--esm`, Node ≥ 20.6) captures top-level
+  exported functions (via a `module.register` loader that reads export names with
+  es-module-lexer and re-exports them wrapped — no source mutation); exported class methods
+  are next. TypeScript works as compiled JS, a CJS TS runner, or ESM TS on Node ≥ 20.6.
 - **Methods** are best-effort: the receiver is serialized with `node:v8`, which doesn't restore
   the class prototype across versions, so method support is reliable for plain-data receivers.
 - I/O / thread counting is best-effort (`fs`, `net`, `worker_threads`); anything it can't see it
