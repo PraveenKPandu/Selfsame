@@ -23,6 +23,8 @@ jobs:
       CENTRAL_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
       CENTRAL_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      # maven-gpg-plugin 3.x reads the passphrase from this env var (loopback mode)
+      MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v7
 
