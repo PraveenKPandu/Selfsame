@@ -1,9 +1,9 @@
 name: release-java
 
-# Builds the packages/java jar and attaches it to a GitHub Release when a
-# `java-vX.Y.Z` tag is pushed. The core is pure JDK, so the jar is built with
-# plain javac/jar (no Maven/network). Maven Central publishing is a documented
-# future step (needs the dev.selfsame namespace + GPG signing); see RELEASING.md.
+# Builds the self-contained Selfsame jar (agent + CLI + worker, ByteBuddy shaded)
+# and attaches it to a GitHub Release when a `java-vX.Y.Z` tag is pushed.
+# Maven Central is a documented future step (needs the dev.selfsame namespace +
+# GPG signing); see RELEASING.md.
 
 on:
   push:
@@ -16,28 +16,36 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to create the GitHub Release + upload the jar
-    defaults:
-      run:
-        working-directory: packages/java
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: maven
 
-      - name: Test (dependency-free runner)
+      - name: Verify tag matches pom version
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: packages/java
         run: |
+          pom=$(grep -m1 '<version>' pom.xml | sed -E 's/.*<version>(.*)<\/version>.*/\1/')
+          tag="${GITHUB_REF_NAME#java-v}"
+          echo "pom=$pom  tag=$tag"
+          test "$pom" = "$tag" || { echo "::error::tag $tag != pom version $pom"; exit 1; }
+
+      - name: Build shaded jar + gate on conformance and capture/replay e2e
+        working-directory: packages/java
+        run: |
+          mvn -B -ntp -DskipTests package
           javac -d out src/main/java/dev/selfsame/*.java src/test/java/dev/selfsame/*.java
           java -cp out dev.selfsame.TestMain
+          bash e2e.sh
 
-      - name: Build jar
+      - name: Stage the versioned jar
+        working-directory: packages/java
         run: |
-          rm -rf classes && mkdir classes
-          javac -d classes src/main/java/dev/selfsame/*.java
-          VER="${GITHUB_REF_NAME#java-v}"
-          [ -n "$VER" ] || VER="dev"
-          jar --create --file "selfsame-${VER}.jar" -C classes .
+          VER="${GITHUB_REF_NAME#java-v}"; [ -n "$VER" ] || VER="dev"
+          cp target/selfsame.jar "selfsame-${VER}.jar"
           ls -la selfsame-*.jar
 
       - name: Attach jar to GitHub Release
