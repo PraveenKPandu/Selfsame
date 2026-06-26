@@ -18,7 +18,7 @@ compiled ones with no interception point largely cannot without rewriting the co
 |---|---|---|
 | **Python** | ✅ shipped (reference) | dynamic runtime; full guarantee. Lives in [`packages/python/`](../packages/python/) |
 | **JavaScript / TypeScript** | 🟢 alpha | conformance + end-to-end `verify`/`snapshot`/`drift` + agent JSON report (CommonJS; ESM + richer methods in progress). Lives in [`packages/node/`](../packages/node/) |
-| **Java (JVM)** | 🟢 alpha | end-to-end capture (`-javaagent`) → replay → compare for public static methods; passes conformance. Instance methods, `verify`, I/O quarantine pending. In [`packages/java/`](../packages/java/) |
+| **Java (JVM)** | 🟢 alpha | end-to-end capture (`-javaagent`) → replay → compare for public static + instance methods; passes conformance. One-command `verify` and I/O quarantine pending. In [`packages/java/`](../packages/java/) |
 | **Go** | ⏸️ held | no runtime interception or reflection-on-functions; can't freeze `time.Now()`/`rand` for arbitrary code without rewriting it (which breaks soundness) |
 | **Rust** | ⏸️ held | no reflection; generic capture/determinism are impossible without source annotation (`#[…]` macros + `serde` bounds) — a different, manual UX |
 

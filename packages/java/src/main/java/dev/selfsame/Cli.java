@@ -87,6 +87,7 @@ public final class Cli {
             if (g == null) {
                 g = new LinkedHashMap<>();
                 g.put("param_types", rec.get("param_types"));
+                g.put("is_method", rec.get("is_method"));
                 g.put("args", new ArrayList<Object>());
                 byKey.put(key, g);
             }
@@ -105,6 +106,7 @@ public final class Cli {
             Map<String, Object> job = new LinkedHashMap<>();
             job.put("className", className);
             job.put("method", method);
+            job.put("is_method", e.getValue().get("is_method"));
             job.put("param_types", e.getValue().get("param_types"));
             job.put("args_b64", argsB64);
             String jobJson = Json.serialize(job);

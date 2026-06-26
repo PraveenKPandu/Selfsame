@@ -1,9 +1,10 @@
 # selfsame (JVM / Java)
 
 > **Status: alpha — end-to-end.** Capture (a `-javaagent`) → replay → compare works for
-> **public static methods**, and the comparator core passes the cross-language
-> [conformance suite](../../SPEC/conformance/). Instance-method receivers, a one-command
-> `verify`, and I/O quarantine are the next steps (see below).
+> public **static and instance** methods (the receiver is reconstructed and its post-call
+> mutation is compared), and the comparator core passes the cross-language
+> [conformance suite](../../SPEC/conformance/). A one-command `verify` and I/O quarantine are
+> the next steps (see below).
 
 A JVM implementation of the [Selfsame Protocol](../../SPEC/protocol.md): sound,
 zero-false-confidence behavior checking. It captures the *real* arguments your tests/app feed
@@ -40,7 +41,7 @@ non-zero on any divergence, so it drops into CI.
 
 | protocol piece | this implementation |
 |---|---|
-| **Capture** (§5) | a `-javaagent` (ByteBuddy `Advice`) records args to matching classes' public static methods; round-tripped by `ValueCodec` |
+| **Capture** (§5) | a `-javaagent` (ByteBuddy `Advice`) records args (and, for instance methods, the receiver) of matching classes' public methods; round-tripped by `ValueCodec` (objects reconstructed via `ReflectionFactory`, like Java serialization) |
 | **Canonicalize** (§4) | `Canonical.java` — integers/`BigInteger`, `double` (NaN/±inf/-0), `BigDecimal` (keeps scale), `String`/`char`, `byte[]`, arrays, `List`/`Set`/`Map` (order-normalized), `java.time`, `enum`, `Class`, POJO/record by state; unrepresentable → `opaque` |
 | **Soundness** (§6) + **compare** (§8) | `Soundness.java` — passes the conformance vectors |
 | **Determinism** (§7) | run-twice guard (nondeterministic methods refused). *Clock/entropy freezing and I/O quarantine are not yet implemented — see limits.* |
@@ -48,11 +49,12 @@ non-zero on any divergence, so it drops into CI.
 
 ## Honest limitations (alpha)
 
-- **Public static methods only.** Instance methods need receiver reconstruction across versions
-  (the same problem Python solves with pickle, JS with `v8.serialize`) — next.
-- **Argument types** are limited to what `ValueCodec` round-trips (primitives, `String`,
-  `BigInteger`/`BigDecimal`, `byte[]`, `List`/`Map`/`Object[]`); a call with an unsupported arg
-  is skipped — sound under-capture, never a wrong reconstruction.
+- **Receiver/arg reconstruction is field-based.** Objects are rebuilt by allocating the
+  instance (no constructor invoked) and setting declared fields — fine for data/POJO-shaped
+  values. A value `ValueCodec` can't round-trip (JDK-internal types, cyclic graphs beyond the
+  depth cap, unencodable fields) makes that capture skip — sound under-capture, never a wrong
+  reconstruction. Supported directly: primitives, `String`, `BigInteger`/`BigDecimal`,
+  `byte[]`, `List`/`Map`/`Object[]`, and non-JDK objects by their fields.
 - **No I/O / thread quarantine yet.** Unlike Python/JS, this MVP doesn't count uncontrolled I/O
   or threads; soundness rests on the run-twice determinism guard (nondeterministic code is
   refused). Deterministic I/O is compared as-is.

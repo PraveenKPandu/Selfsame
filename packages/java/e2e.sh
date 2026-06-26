@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# End-to-end test for the JVM capture -> replay pipeline.
+# End-to-end test for the JVM capture -> replay pipeline (static + instance methods).
 # Run after `mvn -DskipTests package` (needs target/selfsame.jar).
 #
 #   bash e2e.sh
 #
-# Builds two versions of a sample class, captures real inputs by running a driver
-# under the agent, replays the captures against both versions, and asserts that a
-# real behavior change is caught (and that identical code is reported equivalent).
+# Builds two versions of a sample package, captures real inputs by running a
+# driver under the agent, replays against both versions, and asserts that real
+# behavior changes are caught (and identical code is reported equivalent).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 JAR="$HERE/target/selfsame.jar"
@@ -14,43 +14,58 @@ JAR="$HERE/target/selfsame.jar"
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/v1" "$T/v2"
+mkdir -p "$T/v1/shop" "$T/v2/shop"
 
-cat > "$T/v1/Calc.java" <<'JAVA'
-public class Calc { public static long applyDiscount(long price, int pct){ return Math.round(price*(1-pct/100.0)); } }
+# v1
+cat > "$T/v1/shop/Pricing.java" <<'JAVA'
+package shop;
+public class Pricing { public static long applyDiscount(long price, int pct){ return Math.round(price*(1-pct/100.0)); } }
 JAVA
-cat > "$T/v1/Main.java" <<'JAVA'
+cat > "$T/v1/shop/Account.java" <<'JAVA'
+package shop;
+public class Account { private long balance; public Account(long b){ this.balance=b; }
+  public long withdraw(int amt){ balance -= amt; return balance; } }
+JAVA
+cat > "$T/v1/shop/Main.java" <<'JAVA'
+package shop;
 public class Main { public static void main(String[] a){
-  for (int[] in : new int[][]{{100,10},{101,10},{3,10},{50,50}}) Calc.applyDiscount(in[0], in[1]);
+  for (int[] in : new int[][]{{100,10},{101,10},{3,10}}) Pricing.applyDiscount(in[0], in[1]);
+  Account acc = new Account(100); acc.withdraw(30); acc.withdraw(20);
 }}
 JAVA
-cat > "$T/v2/Calc.java" <<'JAVA'
-public class Calc { public static long applyDiscount(long price, int pct){ return (long)Math.floor(price*(1-pct/100.0)); } }
+# v2: floor pricing + a withdrawal fee (both behavior changes)
+cat > "$T/v2/shop/Pricing.java" <<'JAVA'
+package shop;
+public class Pricing { public static long applyDiscount(long price, int pct){ return (long)Math.floor(price*(1-pct/100.0)); } }
+JAVA
+cat > "$T/v2/shop/Account.java" <<'JAVA'
+package shop;
+public class Account { private long balance; public Account(long b){ this.balance=b; }
+  public long withdraw(int amt){ balance -= amt + 1; return balance; } }
 JAVA
 
-javac -d "$T/before" "$T/v1/Calc.java" "$T/v1/Main.java"
-javac -d "$T/after"  "$T/v2/Calc.java"
+javac -d "$T/before" "$T/v1/shop/"*.java
+javac -d "$T/after"  "$T/v2/shop/Pricing.java" "$T/v2/shop/Account.java"
 
-java -jar "$JAR" capture --target Calc --cp "$T/before" --out "$T/caps" --main Main >/dev/null
+java -jar "$JAR" capture --target shop --cp "$T/before" --out "$T/caps" --main shop.Main >/dev/null
 [ -f "$T/caps/captures.json" ] || { echo "FAIL: no captures produced"; exit 1; }
 
 fail=0
 
-# 1. a real behavior change must be caught (exit 1, 'divergent')
 out="$(java -jar "$JAR" replay --before "$T/before" --after "$T/after" --captures "$T/caps")"; code=$?
 echo "$out"
-if [ "$code" = "1" ] && echo "$out" | grep -q "divergent"; then
-  echo "PASS: divergence caught"
+# both the static method (round->floor) and the instance method (fee) must diverge
+if [ "$code" = "1" ] && echo "$out" | grep -q "applyDiscount.*divergent" && echo "$out" | grep -q "withdraw.*divergent"; then
+  echo "PASS: static + instance divergences caught"
 else
-  echo "FAIL: expected exit 1 + divergent (got exit $code)"; fail=1
+  echo "FAIL: expected exit 1 with applyDiscount + withdraw divergent (exit $code)"; fail=1
 fi
 
-# 2. identical code must be equivalent (exit 0, no false positive)
 out="$(java -jar "$JAR" replay --before "$T/before" --after "$T/before" --captures "$T/caps")"; code=$?
-if [ "$code" = "0" ] && echo "$out" | grep -q "equivalent"; then
+if [ "$code" = "0" ] && ! echo "$out" | grep -q "divergent"; then
   echo "PASS: identical code equivalent"
 else
-  echo "FAIL: expected exit 0 + equivalent (got exit $code)"; fail=1
+  echo "FAIL: expected exit 0 + no divergence (exit $code)"; fail=1
 fi
 
 [ "$fail" = "0" ] && echo "e2e OK" || { echo "e2e FAILED"; exit 1; }
