@@ -61,7 +61,7 @@ jobs:
         java-version: ["17", "21"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ matrix.java-version }}
@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -131,7 +131,7 @@ jobs:
         if: matrix.lang == 'node'
         working-directory: packages/node
         run: node --test test/conformance.test.js
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         if: matrix.lang == 'java'
         with:
           distribution: temurin
